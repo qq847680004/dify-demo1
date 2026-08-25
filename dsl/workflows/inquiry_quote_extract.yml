@@ -1,0 +1,264 @@
+version: "0.7.0"
+kind: app
+app:
+  name: "询价字段抽取"
+  description: "从客户询价文本中抽出固定 13 键业务字段，并以严格 JSON 字符串输出"
+  icon: "📦"
+  icon_type: emoji
+  icon_background: "#E4FBCC"
+  mode: workflow
+  use_icon_as_answer_icon: false
+dependencies:
+  - current_identifier: null
+    type: marketplace
+    value:
+      marketplace_plugin_unique_identifier: langgenius/openai:0.2.6@e2665624a156f52160927bceac9e169bd7e5ae6b936ae82575e14c90af390e6e
+      version: null
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features: {}
+  graph:
+    nodes:
+      - id: start
+        type: custom
+        data:
+          type: start
+          title: "询价输入"
+          variables:
+            - label: "询价内容"
+              variable: inquiry_text
+              type: paragraph
+              required: true
+              max_length: 10000
+        position: {x: 40, y: 240}
+        positionAbsolute: {x: 40, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 90
+      - id: extract_fields
+        type: custom
+        data:
+          type: parameter-extractor
+          title: "抽取询价字段"
+          instruction: |
+            输入是客户询价原文。只抽取原文中出现的信息，禁止臆造港口代码、中文译名、金额或公司名。
+
+            字段规则：
+            - customer_name：取文本中最先出现的公司名。
+            - logistics_type：仅输出「海运」或「空运」；同义归一（如 ocean/sea freight→海运，air freight→空运）；一文同时出现时取先出现的那个；无法判断输出空字符串。
+            - urgency_level：仅输出「紧急」或「普通」；未提及输出空字符串。出现加急/紧急/ASAP/急单等信号为「紧急」；与「不急」并存时仍取「紧急」；仅有普通/不急等信号则为「普通」。不要把未提及默认成「普通」。
+            - origin_port_en / origin_port_zh、dest_port_en / dest_port_zh：合写如「CNNGB/宁波」拆成英文或代码与中文；只出现一侧则另一侧为空；禁止补全未出现的代码或译名。
+            - cargo_name：货物品名原文。
+            - cargo_spec：规格原文（如约1,200KG，6CBM）。
+            - quote_amount / quote_currency：多金额取第一个及其对应币种；去掉千分位与币种符号后得到数值；币种归一为符号（USD→$、CNY/RMB/元→¥、EUR→€）；无金额则金额为 0、币种为空。
+            - quote_terms：多条款只取第一个条款词；不擅自标准化缩写。
+            - service_scope：原文服务项；多项用「 / 」（两侧各一空格）连接。
+
+            字符串未出现 → 空字符串；金额无法抽取 → 0。
+          model:
+            provider: langgenius/openai/openai
+            name: gpt-4.1-mini
+            mode: chat
+            completion_params:
+              temperature: 0.1
+          parameters:
+            - name: customer_name
+              type: string
+              description: "文本中最先出现的公司名；未出现则为空字符串"
+              required: false
+            - name: logistics_type
+              type: string
+              description: "仅「海运」或「空运」；无法判断为空字符串"
+              required: false
+            - name: urgency_level
+              type: string
+              description: "仅「紧急」或「普通」；未提及为空字符串"
+              required: false
+            - name: origin_port_en
+              type: string
+              description: "起运港英文名或代码；原文未出现则为空"
+              required: false
+            - name: origin_port_zh
+              type: string
+              description: "起运港中文名；原文未出现则为空"
+              required: false
+            - name: dest_port_en
+              type: string
+              description: "目的港英文名或代码；原文未出现则为空"
+              required: false
+            - name: dest_port_zh
+              type: string
+              description: "目的港中文名；原文未出现则为空"
+              required: false
+            - name: cargo_name
+              type: string
+              description: "货物品名原文"
+              required: false
+            - name: cargo_spec
+              type: string
+              description: "货品规格原文，如约1,200KG，6CBM"
+              required: false
+            - name: quote_amount
+              type: number
+              description: "报价金额浮点数；多金额取第一个；无法抽取则为 0"
+              required: false
+            - name: quote_currency
+              type: string
+              description: "与所选金额对齐的货币符号，如 ¥/$/€；无金额则为空"
+              required: false
+            - name: quote_terms
+              type: string
+              description: "第一个贸易条款词，如 CIF；未出现则为空"
+              required: false
+            - name: service_scope
+              type: string
+              description: "服务项原文；多项用「 / 」连接"
+              required: false
+          query: [start, inquiry_text]
+          reasoning_mode: function_call
+          vision:
+            enabled: false
+        position: {x: 360, y: 240}
+        positionAbsolute: {x: 360, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 98
+      - id: build_json
+        type: custom
+        data:
+          type: code
+          title: "装配严格 JSON"
+          code_language: python3
+          code: |
+            import json
+
+            def main(
+                customer_name: str = None,
+                logistics_type: str = None,
+                urgency_level: str = None,
+                origin_port_en: str = None,
+                origin_port_zh: str = None,
+                dest_port_en: str = None,
+                dest_port_zh: str = None,
+                cargo_name: str = None,
+                cargo_spec: str = None,
+                quote_amount=None,
+                quote_currency: str = None,
+                quote_terms: str = None,
+                service_scope: str = None,
+            ) -> dict:
+                def as_str(value):
+                    if value is None:
+                        return ""
+                    text = str(value).strip()
+                    if text.lower() in ("none", "null"):
+                        return ""
+                    return text
+
+                def as_amount(value):
+                    if value is None or value == "":
+                        return 0.0
+                    try:
+                        if isinstance(value, str):
+                            cleaned = value.replace(",", "").replace(" ", "").strip()
+                            if cleaned == "":
+                                return 0.0
+                            return float(cleaned)
+                        return float(value)
+                    except (TypeError, ValueError):
+                        return 0.0
+
+                payload = {
+                    "customer_name": as_str(customer_name),
+                    "logistics_type": as_str(logistics_type),
+                    "urgency_level": as_str(urgency_level),
+                    "origin_port_en": as_str(origin_port_en),
+                    "origin_port_zh": as_str(origin_port_zh),
+                    "dest_port_en": as_str(dest_port_en),
+                    "dest_port_zh": as_str(dest_port_zh),
+                    "cargo_name": as_str(cargo_name),
+                    "cargo_spec": as_str(cargo_spec),
+                    "quote_amount": as_amount(quote_amount),
+                    "quote_currency": as_str(quote_currency),
+                    "quote_terms": as_str(quote_terms),
+                    "service_scope": as_str(service_scope),
+                }
+                return {"result_json": json.dumps(payload, ensure_ascii=False)}
+          variables:
+            - variable: customer_name
+              value_selector: [extract_fields, customer_name]
+            - variable: logistics_type
+              value_selector: [extract_fields, logistics_type]
+            - variable: urgency_level
+              value_selector: [extract_fields, urgency_level]
+            - variable: origin_port_en
+              value_selector: [extract_fields, origin_port_en]
+            - variable: origin_port_zh
+              value_selector: [extract_fields, origin_port_zh]
+            - variable: dest_port_en
+              value_selector: [extract_fields, dest_port_en]
+            - variable: dest_port_zh
+              value_selector: [extract_fields, dest_port_zh]
+            - variable: cargo_name
+              value_selector: [extract_fields, cargo_name]
+            - variable: cargo_spec
+              value_selector: [extract_fields, cargo_spec]
+            - variable: quote_amount
+              value_selector: [extract_fields, quote_amount]
+            - variable: quote_currency
+              value_selector: [extract_fields, quote_currency]
+            - variable: quote_terms
+              value_selector: [extract_fields, quote_terms]
+            - variable: service_scope
+              value_selector: [extract_fields, service_scope]
+          outputs:
+            result_json:
+              type: string
+              children: null
+        position: {x: 680, y: 240}
+        positionAbsolute: {x: 680, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 100
+      - id: end
+        type: custom
+        data:
+          type: end
+          title: "输出 JSON"
+          outputs:
+            - variable: result_json
+              value_selector: [build_json, result_json]
+              value_type: string
+        position: {x: 1000, y: 240}
+        positionAbsolute: {x: 1000, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 90
+    edges:
+      - id: start-source-extract_fields-target
+        source: start
+        sourceHandle: source
+        target: extract_fields
+        targetHandle: target
+        type: custom
+        data: {sourceType: start, targetType: parameter-extractor, isInIteration: false, isInLoop: false}
+      - id: extract_fields-source-build_json-target
+        source: extract_fields
+        sourceHandle: source
+        target: build_json
+        targetHandle: target
+        type: custom
+        data: {sourceType: parameter-extractor, targetType: code, isInIteration: false, isInLoop: false}
+      - id: build_json-source-end-target
+        source: build_json
+        sourceHandle: source
+        target: end
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: end, isInIteration: false, isInLoop: false}
+    viewport: {x: 0, y: 0, zoom: 0.8}

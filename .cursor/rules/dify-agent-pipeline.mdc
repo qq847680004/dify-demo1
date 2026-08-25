@@ -5,10 +5,12 @@ alwaysApply: true
 
 # 生产流水线
 
-本仓库只产出可导入 Dify 1.16 的 App DSL。权威顺序：
+本仓库只产出可导入 Dify 1.16.x 的 App DSL。文档站点示例版本为 1.16.1；DSL 形状以 `$dify-workflow-dsl` 的 0.7.0 / 1.16.0 源码基线为准。冲突时以当次 MCP 节点页为准，不要把文档全文抄进规则。
 
-1. 用 `dify-docs` MCP（`search_dify_docs` / `query_docs_filesystem_dify_docs`）核对节点、Agent、导入导出、MCP 发布等官方行为。
-2. 用 `$dify-workflow-dsl` 生成或修改 YAML。不要凭记忆发明 `provider_id`、插件 identity 或 Agent 包字段。
+权威顺序（每次生成或改 YAML 都要走）：
+
+1. 用 `dify-docs` MCP（`search_dify_docs` language=`zh`，再 `query_docs_filesystem_dify_docs` 读 `.mdx`）核对**当次用到的**节点、导入导出、MCP 发布。中英文冲突以英文原版为准。
+2. 用 `$dify-workflow-dsl` 写 YAML。不要凭记忆发明 `provider_id`、插件 identity、`data.type` 或 Agent 包字段。
 3. 对照 skill 内 `examples/dify-1.16.0/`，尤其 `10-agent-app.yml` 与 `09-agent-v2-workflow.yml`。
 
 落盘：

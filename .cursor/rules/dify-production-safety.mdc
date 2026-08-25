@@ -5,7 +5,7 @@ alwaysApply: true
 
 # 生产安全
 
-禁止写入：API Key、数据库密码、webhook 密钥、credential ID、私有 dataset/document ID、MCP Server URL。用环境变量、工作区授权或明确占位符。
+禁止写入：API Key、数据库密码、webhook 密钥、credential ID、私有 dataset/document ID、MCP Server URL、发布为 MCP 后的服务 URL、Webhook 触发器 URL。用环境变量、工作区授权或明确占位符。MCP 工具按服务器标识符引用，标识符与 URL 都不可跨工作区臆造。
 
 插件与工具：
 
@@ -20,6 +20,6 @@ Agent 生产约束：
 
 - 选支持工具调用的模型；给工具写清“做什么 / 何时用”。
 - 设置合理迭代上限；不要把密钥放进 prompt。
-- 将 Dify 应用发布为 MCP 时，生成的 URL 视同密钥，不得提交到仓库。
+- 将 Dify 应用发布为 MCP 时，生成的 URL 视同密钥，不得提交到仓库。仅用户输入起步的工作流才能发布为 MCP。
 
 导入后必做：重连模型凭据、工具授权、Skill、文件、联系人、知识库，并在目标工作区做一次真实导入与试跑。

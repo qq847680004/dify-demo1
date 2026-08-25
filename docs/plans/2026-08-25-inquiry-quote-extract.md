@@ -1,6 +1,6 @@
 # 询价文本字段抽取工作流 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** 按 Task 顺序逐步实施本计划；使用 checkbox（`- [ ]` / `- [x]`）跟踪进度。实施时显式使用 `$dify-workflow-dsl` skill。
 
 **Goal:** 生成可导入 Dify 1.16 的 Workflow DSL：输入客户**询价文本**，结构化抽出客户、物流、港口、货品、服务与报价相关字段，并在流程终点严格输出一份含全部键的 JSON（字符串缺省 `""`，金额缺省 `0`）。
 
@@ -119,10 +119,10 @@
 
 | 路径 | 职责 |
 | --- | --- |
-| `docs/superpowers/plans/2026-08-25-inquiry-quote-extract.md` | 本计划 |
+| `docs/plans/2026-08-25-inquiry-quote-extract.md` | 本计划 |
 | `CONTEXT.md` | 领域 glossary |
 | `docs/adr/0001-*.md` … `0003-*.md` | grilling 决策 |
-| `dsl/workflows/inquiry_quote_extract.yml` | 待生成 DSL |
+| `dsl/workflows/inquiry_quote_extract.yml` | Workflow DSL |
 | `scripts/validate_dsl.py` | 校验入口 |
 
 不新增应用代码、不写测试代码（本仓库只产 DSL；验证靠严格校验 + 人工导入试跑）。
@@ -141,15 +141,15 @@
 - Consumes: 本字段契约、图计划、严格 JSON 终态要求
 - Produces: 确认 `parameter-extractor`（含 `number`）、`code`、`end.outputs` 形状
 
-- [ ] **Step 1: 查官方文档**
+- [x] **Step 1: 查官方文档**
 
 用 `search_dify_docs`（language=`zh`）查「参数提取器」「代码执行」「输出」，再 `query_docs_filesystem_dify_docs` 读对应 `.mdx`。
 
-- [ ] **Step 2: 对照 skill schema**
+- [x] **Step 2: 对照 skill schema**
 
 打开 `references/node-schemas.md` 的 `parameter-extractor`、`code`、`end`。
 
-- [ ] **Step 3: 记录工作区假设**
+- [x] **Step 3: 记录工作区假设**
 
 写明模型占位符策略；`dependencies` 有证据才写。
 
@@ -166,7 +166,7 @@
 - Consumes: Task 1；本计划与 `CONTEXT.md`
 - Produces: 完整 DSL，四节点连通，`end` 仅含 `result_json`
 
-- [ ] **Step 1: 调用 skill 生成**
+- [x] **Step 1: 调用 skill 生成**
 
 显式使用 `$dify-workflow-dsl`，DSL `0.7.0`，`workflow`。节点 ID：`start`、`extract_fields`、`build_json`、`end`。
 
@@ -180,7 +180,7 @@
 
 `extract_fields.parameters` 覆盖全部 **13** 变量；`quote_amount` 为 `number`，其余 `string`；无 `is_urgent`。
 
-- [ ] **Step 2: 实现 `build_json` 与 edges / end**
+- [x] **Step 2: 实现 `build_json` 与 edges / end**
 
 边：`start → extract_fields → build_json → end`。`build_json` 输出 `result_json`。`end.outputs` 仅：
 
@@ -189,7 +189,7 @@
   value_selector: [build_json, result_json]
 ```
 
-- [ ] **Step 3: 自检清单（写入前）**
+- [x] **Step 3: 自检清单（写入前）**
 
 - `version: "0.7.0"` 有引号  
 - `urgency_level` 缺省为空，不默认普通  
@@ -206,7 +206,7 @@
 - Modify: 仅校验失败时改 YAML
 - Test: `scripts/validate_dsl.py`
 
-- [ ] **Step 1: 跑严格校验**
+- [x] **Step 1: 跑严格校验**
 
 ```text
 python scripts/validate_dsl.py --strict --target-version 0.7.0 dsl/workflows/inquiry_quote_extract.yml
@@ -214,9 +214,9 @@ python scripts/validate_dsl.py --strict --target-version 0.7.0 dsl/workflows/inq
 
 Expected: exit code `0`。
 
-- [ ] **Step 2: 若失败则按诊断修 YAML**
+- [x] **Step 2: 若失败则按诊断修 YAML**
 
-- [ ] **Step 3: 交付说明**
+- [x] **Step 3: 交付说明**
 
 含路径、导入、重连凭据、样例试跑、静态校验≠业务准确。
 
@@ -273,4 +273,4 @@ Expected: exit code `0`。
 | 服务 ` / ` | `service_scope` |
 | 仅 `result_json` 验收 | `end` |
 | 提取失败仍出空壳 | `build_json` |
-| Task 1–3 待执行 | 未实施 DSL |
+| Task 1–3 已执行 | `dsl/workflows/inquiry_quote_extract.yml` |

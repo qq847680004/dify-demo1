@@ -22,7 +22,7 @@ agent_packages:
     omitted_assets: []
 ```
 
-Workflow / Chatflow 中的 Agent 节点必须是 v2，并在顶层提供同名 package：
+新 Agent 节点（文档「新 Agent」）目前 Beta，仅 Workflow。Chatflow 需要时先用 MCP 核对当页，不要默认可用。节点必须是 v2，并在顶层提供同名 package：
 
 ```yaml
 data:
@@ -42,4 +42,3 @@ data:
 - `declared_outputs` 为空时下游用 `text` / `files` / `json`；非空则只用声明名。
 - DSL 不含 Skill 和文件。`omitted_assets` 只记录缺失，不编造内容。
 - 固定工具调用用普通 tool 节点；工具选择动态时才用 Agent。
-- 新 Agent 节点目前主要在 Workflow 中使用；Chatflow 需要时先用 MCP 核对当前文档。

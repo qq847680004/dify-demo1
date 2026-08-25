@@ -7,13 +7,14 @@ alwaysApply: true
 
 - 顶层固定：`version: "0.7.0"`（必须加引号）、`kind: app`。
 - 图模式必须同时有 `workflow.graph.nodes` 与 `workflow.graph.edges`。
-- 节点包装 `type` 一般为 `custom`；运行时种类在 `data.type`。
+- 节点包装 `type` 一般为 `custom`；运行时种类在 `data.type`。文档中文名（如「输出」）不等于 `data.type`；以 skill schema + 当次 MCP 为准（当前终点为 `end`）。
 - 节点 ID 只用字母、数字、下划线，长度 1–50。不要用连字符（`{{#node_id.field#}}` 会失败）。
 - selector 形如 `["node_id", "text"]`；模板插值形如 `{{#node_id.field#}}`，只引用已声明输出。
 
 入口与终点：
 
-- `workflow`：`start` 或 trigger 入口；普通流程必须能到达 `end`。
+- `workflow`：`start`（用户输入）或 trigger 入口。对外要返回数据（API `outputs`、发布为工具）必须有可达的 `end`；变量名即 API 键，多终点勿重名。
+- 仅用户输入起步的工作流才能发布为 Web / MCP / Service API / 工具。触发器仅 Workflow。
 - `advanced-chat`：恰好一个 `start`，必须能到达 `answer`。
 - 每个运行时节点必须从入口可达，禁止意外环。
 
@@ -22,6 +23,8 @@ alwaysApply: true
 - `if-else` → case ID 或 `false`
 - `question-classifier` → class ID
 - `human-input` → `user_actions[].id`（超时用 `__timeout`）
+
+参数提取器：参数类型 `string` / `number` / `boolean` / `array` / `object`；`reasoning_mode` 优先 `function_call`；失败看 `__is_success` / `__reason`。下游需要完整 JSON 时用 `code` 装配缺省，不要假定提取器必成功。
 
 LLM 节点即使关闭检索也必须带：
 
