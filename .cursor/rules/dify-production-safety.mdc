@@ -1,0 +1,25 @@
+---
+description: 生产安全：密钥、插件 identity、MCP URL、导入后重连
+alwaysApply: true
+---
+
+# 生产安全
+
+禁止写入：API Key、数据库密码、webhook 密钥、credential ID、私有 dataset/document ID、MCP Server URL。用环境变量、工作区授权或明确占位符。
+
+插件与工具：
+
+- 每个用到的 marketplace / package / GitHub 插件必须有顶层 `dependencies`，identity 原样抄自目标工作区导出或官方文档。
+- 不要发明 `provider_id`、`provider_name`、`tool_name`、`marketplace_plugin_unique_identifier`。
+- 未知工具证据顺序：工作区最小导出 → 插件源码 / `.difypkg` → Marketplace → 仅工具名（标为草稿）。
+- `provider_type` 为 `workflow` / `api` / `mcp` 的 identity 通常不可跨工作区移植。
+
+SQL 只用参数化查询。拼接 SQL、多语句、DDL、写操作必须标为风险。
+
+Agent 生产约束：
+
+- 选支持工具调用的模型；给工具写清“做什么 / 何时用”。
+- 设置合理迭代上限；不要把密钥放进 prompt。
+- 将 Dify 应用发布为 MCP 时，生成的 URL 视同密钥，不得提交到仓库。
+
+导入后必做：重连模型凭据、工具授权、Skill、文件、联系人、知识库，并在目标工作区做一次真实导入与试跑。

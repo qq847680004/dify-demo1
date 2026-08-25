@@ -1,0 +1,34 @@
+---
+description: Dify 1.16 App DSL 0.7.0 图结构、节点 ID、边与变量引用
+alwaysApply: true
+---
+
+# DSL 0.7.0 图结构
+
+- 顶层固定：`version: "0.7.0"`（必须加引号）、`kind: app`。
+- 图模式必须同时有 `workflow.graph.nodes` 与 `workflow.graph.edges`。
+- 节点包装 `type` 一般为 `custom`；运行时种类在 `data.type`。
+- 节点 ID 只用字母、数字、下划线，长度 1–50。不要用连字符（`{{#node_id.field#}}` 会失败）。
+- selector 形如 `["node_id", "text"]`；模板插值形如 `{{#node_id.field#}}`，只引用已声明输出。
+
+入口与终点：
+
+- `workflow`：`start` 或 trigger 入口；普通流程必须能到达 `end`。
+- `advanced-chat`：恰好一个 `start`，必须能到达 `answer`。
+- 每个运行时节点必须从入口可达，禁止意外环。
+
+分支 `sourceHandle`：
+
+- `if-else` → case ID 或 `false`
+- `question-classifier` → class ID
+- `human-input` → `user_actions[].id`（超时用 `__timeout`）
+
+LLM 节点即使关闭检索也必须带：
+
+```yaml
+context:
+  enabled: false
+  variable_selector: []
+```
+
+大图先写节点计划（ID / 类型 / 输入输出 / 边），再填 payload，最后集中装配并校验。不要让分散生成互相发明冲突的 ID。

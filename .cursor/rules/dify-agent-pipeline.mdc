@@ -1,0 +1,27 @@
+---
+description: 生产 Dify 智能体的标准流水线：MCP 查文档、skill 写 DSL、落盘与校验
+alwaysApply: true
+---
+
+# 生产流水线
+
+本仓库只产出可导入 Dify 1.16 的 App DSL。权威顺序：
+
+1. 用 `dify-docs` MCP（`search_dify_docs` / `query_docs_filesystem_dify_docs`）核对节点、Agent、导入导出、MCP 发布等官方行为。
+2. 用 `$dify-workflow-dsl` 生成或修改 YAML。不要凭记忆发明 `provider_id`、插件 identity 或 Agent 包字段。
+3. 对照 skill 内 `examples/dify-1.16.0/`，尤其 `10-agent-app.yml` 与 `09-agent-v2-workflow.yml`。
+
+落盘：
+
+- 独立 Agent App → `dsl/agents/<name>.yml`（`app.mode: agent`）
+- 含 Agent 节点的 Workflow / Chatflow → `dsl/workflows/<name>.yml`
+
+默认 `workflow`。仅当需要多轮记忆、`sys.query`、`sys.files` 或 `answer` 节点时用 `advanced-chat`。
+
+交付前必须：
+
+```text
+python scripts/validate_dsl.py --strict --target-version 0.7.0 <file.yml>
+```
+
+校验失败先修 YAML。通过后仍须说明：导入目标工作区后要重连模型凭据、工具授权、Skill、文件和知识库。禁止声称“导入即可运行”。

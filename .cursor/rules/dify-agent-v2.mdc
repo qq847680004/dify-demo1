@@ -1,0 +1,45 @@
+---
+description: 独立 Agent App 与 Workflow Agent v2 节点：能力与任务分离
+alwaysApply: true
+---
+
+# Agent 能力与任务
+
+能力（soul：角色、提示词、模型、工具、知识）与任务（本次要做什么）分开写。不要把一次性任务写进 soul，也不要把人格写进 workflow 任务。
+
+独立 Agent App 落在 `dsl/agents/`：
+
+```yaml
+version: "0.7.0"
+kind: app
+app: {name: "研究 Agent", mode: agent}
+agent: {package_ref: agent_1}
+agent_packages:
+  agent_1:
+    schema_version: 1
+    metadata: {name: "研究 Agent", description: "", role: researcher}
+    soul: {schema_version: 1}
+    omitted_assets: []
+```
+
+Workflow / Chatflow 中的 Agent 节点必须是 v2，并在顶层提供同名 package：
+
+```yaml
+data:
+  type: agent
+  version: "2"
+  agent_node_kind: dify_agent
+  agent_binding: {binding_type: inline_agent, package_ref: agent_1}
+  agent_job:
+    schema_version: 1
+    mode: tell_agent_what_to_do
+    workflow_prompt: "只写这一步任务，用 / 引用上游输出。"
+    previous_node_output_refs: [{selector: [start, task]}]
+    declared_outputs: []
+```
+
+- `agent.package_ref` / `agent_binding.package_ref` 必须能在 `agent_packages` 里解析。
+- `declared_outputs` 为空时下游用 `text` / `files` / `json`；非空则只用声明名。
+- DSL 不含 Skill 和文件。`omitted_assets` 只记录缺失，不编造内容。
+- 固定工具调用用普通 tool 节点；工具选择动态时才用 Agent。
+- 新 Agent 节点目前主要在 Workflow 中使用；Chatflow 需要时先用 MCP 核对当前文档。
