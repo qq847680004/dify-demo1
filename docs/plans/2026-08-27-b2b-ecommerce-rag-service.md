@@ -1,6 +1,6 @@
 # BtoB 电商客服 Chatflow
 
-**目标**：生成可导入 Dify 1.16.x 的 Chatflow DSL，用知识检索节点查「BtoB电商知识」，回答**客户**（采购方企业）的咨询。按官方接法：LLM **上下文**接 `kb_search.result`，提示词引用 `{{#context#}}`，以便格式化分段并显示引用来源；另开 30 轮窗口记忆。
+**目标**：生成可导入 Dify 1.16.x 的 Chatflow DSL：先用 Query Rewrite 把对接人原问改写成检索词，再查「BtoB电商知识」，最后按官方接法用 LLM **上下文**接 `kb_search.result`、提示词引用 `{{#context#}}` 作答并显示引用来源；客服 LLM 另开 30 轮窗口记忆。
 
 **落盘**：`dsl/workflows/b2b_ecommerce_rag_service.yml`
 
@@ -16,9 +16,10 @@
 | --- | --- | --- |
 | DSL 版本 | `version: "0.7.0"`（带引号） | 目标 Dify 1.16.x |
 | 应用模式 | `app.mode: advanced-chat` | 需要 `sys.query`、多轮记忆、`answer` 终点 |
-| 知识检索 | 使用 `kb_search`（`knowledge-retrieval`），`dataset_ids` 为占位符 `__KB_B2B_ECOMMERCE_ID__` | 用户澄清：不要知识库是误解；仍要检索节点 |
+| 知识检索 | 使用 `kb_search`（`knowledge-retrieval`），`dataset_ids` 为占位符 `__KB_B2B_ECOMMERCE_ID__`；查询变量为 `query_rewrite.text`，**不用** `sys.query` | 用户要求检索前做语义解析 |
+| Query Rewrite | `kb_search` 前增加 `query_rewrite`（llm）：只输出一条检索查询，不回答问题 | 用户新增 |
 | LLM 上下文 | `context.enabled: true`，`variable_selector: [kb_search, result]`；提示词引用 `{{#context#}}` | grilling：改回官方接法，并要来源引用 |
-| 记忆 | LLM 节点 `memory.window: {enabled: true, size: 30}` | 用户要求 30 轮；与检索并行，不互相替代 |
+| 记忆 | 仅客服节点 `service_llm` 开 `memory.window: {enabled: true, size: 30}`。`query_rewrite` **不开记忆**，只改写当前这一句口语 | 用户修订 |
 | 模型 | `langgenius/tongyi/tongyi` / `qwen3.7-plus` | 复用仓库已有 marketplace 依赖，不发明新 identity |
 | 领域上下文 | 独立 bounded context，不覆盖询价 glossary | grilling R1 |
 | 客户 | 采购方企业；对接人只是发消息的人 | grilling R1 |
@@ -38,14 +39,18 @@
 ```mermaid
 flowchart LR
   chat_start["chat_start
-start"] --> kb_search["kb_search
+start"] --> query_rewrite["query_rewrite
+llm 语义解析"]
+  query_rewrite --> kb_search["kb_search
 knowledge-retrieval"]
   kb_search --> service_llm["service_llm
 llm + memory 30"]
   service_llm --> answer["answer"]
 ```
 
-四节点、三条边。节点 ID 仅字母与下划线；边 `sourceHandle: source` / `targetHandle: target`，`data.sourceType` 与 `data.targetType` 必须与两端 `data.type` 一致。
+五节点、四条边。节点 ID 仅字母与下划线（`query_rewrite`，不用连字符）。边 `sourceHandle: source` / `targetHandle: target`，`data.sourceType` 与 `data.targetType` 必须与两端 `data.type` 一致。
+
+客服答复仍用原始 `{{#sys.query#}}`，不要把改写后的检索词当成用户原话。
 
 ## 3. 节点契约
 
@@ -58,13 +63,58 @@ variables: []
 
 用户输入不走 start 变量，统一用 `{{#sys.query#}}`。
 
+### query_rewrite
+
+语义解析：把**当前这一句**口语改写成适合知识库检索的一条查询。模型与 `service_llm` 相同。`context.enabled: false`。**不开记忆**（不要 `memory.window.enabled: true`；DSL 若必须带 `memory` 对象，则 `window.enabled: false`）。不在此节点作答。
+
+```yaml
+type: llm
+title: "语义解析"
+model:
+  provider: langgenius/tongyi/tongyi
+  name: qwen3.7-plus
+  mode: chat
+  completion_params:
+    temperature: 0.1
+    enable_thinking: false
+context:
+  enabled: false
+  variable_selector: []
+memory:
+  query_prompt_template: "{{#sys.query#}}"
+  role_prefix: {assistant: "", user: ""}
+  window:
+    enabled: false
+    size: 30
+vision:
+  enabled: false
+```
+
+system：
+
+```text
+你是知识库检索查询优化器。
+请将用户的自然语言问题改写成适合知识库检索的简洁查询词。
+要求：
+- 保留核心业务含义
+- 去除「我、我们、请问、可以、能不能、怎么」等口语化表达
+- 优先使用知识库中可能出现的专业术语
+- 不要结合历史对话，不要补全指代；只处理当前这一句
+- 不要回答问题
+- 只输出一条优化后的查询语句
+```
+
+user：`{{#sys.query#}}`
+
+输出：`text`。禁止解释、禁止多行、禁止引号包裹以外的附加内容。
+
 ### kb_search
 
 ```yaml
 type: knowledge-retrieval
 dataset_ids:
   - "__KB_B2B_ECOMMERCE_ID__"
-query_variable_selector: ["sys", "query"]
+query_variable_selector: [query_rewrite, text]
 retrieval_mode: multiple
 multiple_retrieval_config:
   top_k: 5
@@ -179,15 +229,16 @@ variables: []
 - [x] 恢复 `kb_search`；曾误关掉 LLM 上下文
 - [x] 改回官方接法：`context.enabled: true` 接 `kb_search.result`，提示词用 `{{#context#}}`，打开 `retriever_resource`
 - [x] 校验：`python scripts/validate_dsl.py --strict --target-version 0.7.0 dsl/workflows/b2b_ecommerce_rag_service.yml`
+- [x] 在 `kb_search` 前增加 `query_rewrite`；检索查询改为 `query_rewrite.text`
 
 ## 7. 验收标准
 
 - 校验器 strict 模式通过；`advanced-chat` 恰好一个 `start`，`answer` 从入口可达，无环。
-- 图中有 `kb_search`；`service_llm.context.enabled` 为 `true` 且 selector 为 `[kb_search, result]`；提示词引用 `{{#context#}}`；`memory.window.size` 为 `30`；`retriever_resource.enabled` 为 `true`。
+- 图中有 `query_rewrite` → `kb_search` → `service_llm`；`kb_search` 的查询 selector 为 `[query_rewrite, text]`；`query_rewrite` 的 `memory.window.enabled` 为 `false`；`service_llm.context.enabled` 为 `true` 且 selector 为 `[kb_search, result]`；客服提示词引用 `{{#context#}}` 与原始 `{{#sys.query#}}`；仅 `service_llm` 的 `memory.window.size` 为 `30`；`retriever_resource.enabled` 为 `true`。
 - YAML 内不含真实 dataset ID、API Key、credential ID、MCP URL。
 
 ## 8. 导入后必做（不得声称「导入即可运行」）
 
 1. 重连通义模型凭据。
 2. 在 `kb_search` 把占位符换成「BtoB电商知识」知识库。
-3. 在目标工作区做一次真实导入与多轮试跑，重点验证：能按上下文资料作答、Web 端有引用来源、30 轮指代连贯、未找到资料时致歉并请补充（不出现「资料不足 / 无法提供」）、可按情况称「尊敬的客户」、不报价不接单、英文提问英文回复。
+3. 在目标工作区做一次真实导入与多轮试跑，重点验证：口语问句会先改写成检索词再召回、能按上下文资料作答、Web 端有引用来源、未找到资料时致歉并请补充、不报价不接单、英文提问英文回复。改写节点日志里应只有当前句对应的查询词、没有完整答复、也不依赖上一轮对话。「那账期呢」这类指代由客服 LLM 的 30 轮记忆理解，检索侧不保证召回。
