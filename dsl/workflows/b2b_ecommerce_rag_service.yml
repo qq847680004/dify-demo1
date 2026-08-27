@@ -2,7 +2,7 @@ version: "0.7.0"
 kind: app
 app:
   name: "BtoB电商RAG客服"
-  description: "B2B 电商客服：30 轮记忆，不报价、不接单、不改订单"
+  description: "B2B 电商客服：检索企业知识、30 轮记忆、显示引用来源；不报价、不接单、不改订单"
   icon: "💬"
   icon_type: emoji
   icon_background: "#D1E9FF"
@@ -18,13 +18,15 @@ workflow:
   conversation_variables: []
   environment_variables: []
   features:
-    opening_statement: "尊敬的客户，您好。我是 B2B 电商客服，可以协助您咨询流程类问题。请直接说明您的问题。"
+    opening_statement: "尊敬的客户，您好。我是 B2B 电商客服，可以协助您咨询流程类问题。我无法报价、下单或改单。请直接说明您的问题。"
     suggested_questions:
       - "这个型号的包装规格是怎样的？"
       - "最小起订量（MOQ）怎么计算？"
       - "下单需要准备哪些资料？"
     file_upload:
       enabled: false
+    retriever_resource:
+      enabled: true
   graph:
     nodes:
       - id: chat_start
@@ -39,6 +41,27 @@ workflow:
         targetPosition: left
         width: 244
         height: 54
+      - id: kb_search
+        type: custom
+        data:
+          type: knowledge-retrieval
+          title: "检索BtoB电商知识"
+          dataset_ids:
+            - "__KB_B2B_ECOMMERCE_ID__"
+          query_variable_selector: ["sys", "query"]
+          retrieval_mode: multiple
+          multiple_retrieval_config:
+            top_k: 5
+            reranking_enable: false
+            score_threshold_enabled: false
+            score_threshold: 0
+          metadata_filtering_mode: disabled
+        position: {x: 360, y: 240}
+        positionAbsolute: {x: 360, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
       - id: service_llm
         type: custom
         data:
@@ -59,12 +82,12 @@ workflow:
 
                 称呼：「尊敬的客户」不限开场。开场问候、暂时找不到相关资料时的致歉、需要郑重说明时都可以用。同一段回复里后续短句用「您」，不要每句都重复全称。非中文用对等敬称（Dear customer / you）。
 
-                答复语种（硬规则）：对接人当前这句用什么语言，你就用什么语言答。英文问英文答，日文问日文答，其他外语同理。
+                答复语种（硬规则）：对接人当前这句用什么语言，你就用什么语言答。英文问英文答，日文问日文答，其他外语同理。上下文中的资料原文是中文时，只把同一事实译成该语种，不另加内容。
 
                 事实边界（最高优先级）：
-                - 没有检索知识库。不确定、缺少对接人给出的具体信息、或不该承诺的数字与条款，不要编造。
-                - 不报价、不接单、不改订单。不读出具体单价。
-                - 一问多事：能答的照常答；拿不准的部分单独致歉并请补充。
+                - 只依据上下文中的资料回答。不要把未出现在上下文中的内容当成事实。
+                - 不报价、不接单、不改订单。即使上下文里写着单价，也不读出该数字，只转述如何去询价。
+                - 一问多事：上下文能支撑的照常答；撑不起的部分单独致歉并请补充，不要说「无法提供」。
                 - 禁止编造库存、账期、开票、起订量、物流时效、退换与售后等具体数字与条款。
                 - 硬规则高于记忆。结合最近对话理解「这批货」「上面那个型号」等指代；记忆里出现过的价格不得再引用。
 
@@ -73,11 +96,11 @@ workflow:
                 - 应致歉、态度友好，并请对方补充更多信息。语气示例（可换说法）：「尊敬的客户，暂时没有为您找到相关资料。给您添麻烦了，方便再补充一下型号、数量或收货地区吗？我再帮您确认。」
                 - 不提转人工，不编造升级路径，不承诺谁来跟进，不说做不到。
 
-                表达：先给结论，再给要点或步骤；多要点用编号列表。不堆砌术语。
+                表达：先给结论，再给要点或步骤；多要点用编号列表；涉及流程时给出明确的先后顺序。单次回复控制在必要长度。不堆砌术语。
 
-                不争辩：对接人情绪激动或陈述有误时，先致谢或共情、承接诉求，再澄清。不指责、不反驳、不评判。
+                不争辩：对接人情绪激动、催促或陈述有误时，先致谢或共情、承接诉求，再澄清。不指责、不反驳、不评判。
 
-                能帮上忙时给出下一步（补充哪些信息、怎么走询价或下单流程的一般说明）。
+                上下文能支撑时给出下一步（补充哪些信息、怎么走询价或下单流程）。
 
                 不承诺折扣、赔付、加急、免运费、例外条款。不代替商务、财务、法务做决定。
 
@@ -86,10 +109,14 @@ workflow:
                 不重复索要已提供过的信息。前后结论不得自相矛盾；若需修正，明确说明修正点。
             - id: service-user
               role: user
-              text: "{{#sys.query#}}"
+              text: |
+                问题：{{#sys.query#}}
+
+                上下文：
+                {{#context#}}
           context:
-            enabled: false
-            variable_selector: []
+            enabled: true
+            variable_selector: [kb_search, result]
           memory:
             query_prompt_template: "{{#sys.query#}}"
             role_prefix: {assistant: "", user: ""}
@@ -98,8 +125,8 @@ workflow:
               size: 30
           vision:
             enabled: false
-        position: {x: 360, y: 240}
-        positionAbsolute: {x: 360, y: 240}
+        position: {x: 680, y: 240}
+        positionAbsolute: {x: 680, y: 240}
         sourcePosition: right
         targetPosition: left
         width: 244
@@ -111,20 +138,27 @@ workflow:
           title: "回复"
           answer: "{{#service_llm.text#}}"
           variables: []
-        position: {x: 680, y: 240}
-        positionAbsolute: {x: 680, y: 240}
+        position: {x: 1000, y: 240}
+        positionAbsolute: {x: 1000, y: 240}
         sourcePosition: right
         targetPosition: left
         width: 244
         height: 90
     edges:
-      - id: chat_start-source-service_llm-target
+      - id: chat_start-source-kb_search-target
         source: chat_start
+        sourceHandle: source
+        target: kb_search
+        targetHandle: target
+        type: custom
+        data: {sourceType: start, targetType: knowledge-retrieval, isInIteration: false, isInLoop: false}
+      - id: kb_search-source-service_llm-target
+        source: kb_search
         sourceHandle: source
         target: service_llm
         targetHandle: target
         type: custom
-        data: {sourceType: start, targetType: llm, isInIteration: false, isInLoop: false}
+        data: {sourceType: knowledge-retrieval, targetType: llm, isInIteration: false, isInLoop: false}
       - id: service_llm-source-answer-target
         source: service_llm
         sourceHandle: source
