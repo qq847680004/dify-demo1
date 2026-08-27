@@ -12,7 +12,7 @@ dependencies:
   - current_identifier: null
     type: marketplace
     value:
-      marketplace_plugin_unique_identifier: langgenius/openai:0.2.6@e2665624a156f52160927bceac9e169bd7e5ae6b936ae82575e14c90af390e6e
+      marketplace_plugin_unique_identifier: langgenius/tongyi:0.2.15@1df8bd27d67c149e6db3c210830ef6e3857c5a9df5e8edbe9e785b995f337ef5
       version: null
 workflow:
   conversation_variables: []
@@ -49,7 +49,7 @@ workflow:
             - customer_name：取文本中最先出现的公司名。
             - logistics_type：仅输出「海运」或「空运」；同义归一（如 ocean/sea freight→海运，air freight→空运）；一文同时出现时取先出现的那个；无法判断输出空字符串。
             - urgency_level：仅输出「紧急」或「普通」；未提及输出空字符串。出现加急/紧急/ASAP/急单等信号为「紧急」；与「不急」并存时仍取「紧急」；仅有普通/不急等信号则为「普通」。不要把未提及默认成「普通」。
-            - origin_port_en / origin_port_zh、dest_port_en / dest_port_zh：合写如「CNNGB/宁波」拆成英文或代码与中文；只出现一侧则另一侧为空；禁止补全未出现的代码或译名。
+            - origin_port_en / origin_port_zh、dest_port_en / dest_port_zh：国际港口代码（UN/LOCODE，通常 5 位字母，如 CNNGB、USLAX、CNSHA）一律写入英文/代码侧，原样保留，不要当公司名或货号丢掉。合写如「CNNGB/宁波」拆成代码与中文；分行并列（代码一行、中文一行）同样拆开；「A → B」箭头前为起运、后为目的。只出现代码则中文侧为空；只出现中文则代码侧为空。禁止根据城市名补全未出现的代码，也禁止根据代码补全未出现的译名。
             - cargo_name：货物品名原文。
             - cargo_spec：规格原文（如约1,200KG，6CBM）。
             - quote_amount / quote_currency：多金额取第一个及其对应币种；去掉千分位与币种符号后得到数值；币种归一为符号（USD→$、CNY/RMB/元→¥、EUR→€）；无金额则金额为 0、币种为空。
@@ -58,11 +58,12 @@ workflow:
 
             字符串未出现 → 空字符串；金额无法抽取 → 0。
           model:
-            provider: langgenius/openai/openai
-            name: gpt-4.1-mini
+            provider: langgenius/tongyi/tongyi
+            name: qwen3.7-plus
             mode: chat
             completion_params:
               temperature: 0.1
+              enable_thinking: false
           parameters:
             - name: customer_name
               type: string
@@ -78,7 +79,7 @@ workflow:
               required: false
             - name: origin_port_en
               type: string
-              description: "起运港英文名或代码；原文未出现则为空"
+              description: "起运港英文名或国际港口代码（UN/LOCODE，如 CNNGB）；原文未出现则为空"
               required: false
             - name: origin_port_zh
               type: string
@@ -86,7 +87,7 @@ workflow:
               required: false
             - name: dest_port_en
               type: string
-              description: "目的港英文名或代码；原文未出现则为空"
+              description: "目的港英文名或国际港口代码（UN/LOCODE，如 USLAX）；原文未出现则为空"
               required: false
             - name: dest_port_zh
               type: string
@@ -117,7 +118,7 @@ workflow:
               description: "服务项原文；多项用「 / 」连接"
               required: false
           query: [start, inquiry_text]
-          reasoning_mode: function_call
+          reasoning_mode: prompt
           vision:
             enabled: false
         position: {x: 360, y: 240}
