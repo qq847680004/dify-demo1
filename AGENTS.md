@@ -10,4 +10,4 @@ Issues 与 specs 存放在本仓库 `.scratch/<feature-slug>/` 下的 markdown �
 
 ### Domain docs
 
-Single-context：根目录 `CONTEXT.md` + `docs/adr/`。See `docs/agents/domain.md`.
+Multi-context：根目录 `CONTEXT-MAP.md` 指向各 `CONTEXT.md`；系统级 ADR 在 `docs/adr/`。See `docs/agents/domain.md`.
