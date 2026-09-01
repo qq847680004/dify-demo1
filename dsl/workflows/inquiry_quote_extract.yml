@@ -2,7 +2,7 @@ version: "0.7.0"
 kind: app
 app:
   name: "询价字段抽取"
-  description: "从客户询价文本中抽出固定 13 键业务字段，并以严格 JSON 字符串输出"
+  description: "从客户询价文本中抽出固定 11 键业务字段，并以严格 JSON 字符串输出"
   icon: "📦"
   icon_type: emoji
   icon_background: "#E4FBCC"
@@ -43,20 +43,20 @@ workflow:
           type: parameter-extractor
           title: "抽取询价字段"
           instruction: |
-            输入是客户询价原文。只抽取原文中出现的信息，禁止臆造港口代码、中文译名、金额或公司名。
+            输入是客户询价原文。只抽取原文中出现的信息，禁止臆造港口代码、中文译名或公司名。
 
             字段规则：
             - customer_name：取文本中最先出现的公司名。
-            - logistics_type：仅输出「海运」或「空运」；同义归一（如 ocean/sea freight→海运，air freight→空运）；一文同时出现时取先出现的那个；无法判断输出空字符串。
+            - logistics_type：仅输出「海运」「空运」或「陆运」；同义归一（如 ocean/sea freight→海运，air freight→空运，陆运/汽运/卡车/公路运输/land/trucking→陆运）；一文同时出现时取先出现的那个；无法判断输出空字符串。
             - urgency_level：仅输出「紧急」或「普通」；未提及输出空字符串。出现加急/紧急/ASAP/急单等信号为「紧急」；与「不急」并存时仍取「紧急」；仅有普通/不急等信号则为「普通」。不要把未提及默认成「普通」。
-            - origin_port_en / origin_port_zh、dest_port_en / dest_port_zh：国际港口代码（UN/LOCODE，通常 5 位字母，如 CNNGB、USLAX、CNSHA）一律写入英文/代码侧，原样保留，不要当公司名或货号丢掉。合写如「CNNGB/宁波」拆成代码与中文；分行并列（代码一行、中文一行）同样拆开；「A → B」箭头前为起运、后为目的。只出现代码则中文侧为空；只出现中文则代码侧为空。禁止根据城市名补全未出现的代码，也禁止根据代码补全未出现的译名。
+            - origin_port_en / dest_port_en：起运地、目的地的英文名或国际港口代码（UN/LOCODE，通常 5 位字母，如 CNNGB、USLAX、CNSHA），原样保留，不要当公司名或货号丢掉。
+            - origin_port_zh / dest_port_zh：起运地、目的地的中文地名（城市/地区），不限于港口；只输出地名本身，去掉「港」字（如「宁波港」→「宁波」、「洛杉矶港」→「洛杉矶」）；陆运场景同样适用（如「汽运至上海」→ dest_port_zh 为「上海」）。合写如「CNNGB/宁波」拆成代码与中文；分行并列同样拆开；「A → B」箭头前为起运、后为目的。只出现代码则中文侧为空；只出现中文则代码侧为空。禁止根据地名补全未出现的代码，也禁止根据代码补全未出现的译名。
             - cargo_name：货物品名原文。
             - cargo_spec：规格原文（如约1,200KG，6CBM）。
-            - quote_amount / quote_currency：多金额取第一个及其对应币种；去掉千分位与币种符号后得到数值；币种归一为符号（USD→$、CNY/RMB/元→¥、EUR→€）；无金额则金额为 0、币种为空。
             - quote_terms：多条款只取第一个条款词；不擅自标准化缩写。
             - service_scope：原文服务项；多项用「 / 」（两侧各一空格）连接。
 
-            字符串未出现 → 空字符串；金额无法抽取 → 0。
+            字符串未出现 → 空字符串。
           model:
             provider: langgenius/tongyi/tongyi
             name: qwen3.7-plus
@@ -71,7 +71,7 @@ workflow:
               required: false
             - name: logistics_type
               type: string
-              description: "仅「海运」或「空运」；无法判断为空字符串"
+              description: "仅「海运」「空运」或「陆运」；无法判断为空字符串"
               required: false
             - name: urgency_level
               type: string
@@ -79,19 +79,19 @@ workflow:
               required: false
             - name: origin_port_en
               type: string
-              description: "起运港英文名或国际港口代码（UN/LOCODE，如 CNNGB）；原文未出现则为空"
+              description: "起运地英文名或国际港口代码（UN/LOCODE，如 CNNGB）；原文未出现则为空"
               required: false
             - name: origin_port_zh
               type: string
-              description: "起运港中文名；原文未出现则为空"
+              description: "起运地中文地名（如宁波）；去掉「港」后缀；原文未出现则为空"
               required: false
             - name: dest_port_en
               type: string
-              description: "目的港英文名或国际港口代码（UN/LOCODE，如 USLAX）；原文未出现则为空"
+              description: "目的地英文名或国际港口代码（UN/LOCODE，如 USLAX）；原文未出现则为空"
               required: false
             - name: dest_port_zh
               type: string
-              description: "目的港中文名；原文未出现则为空"
+              description: "目的地中文地名（如洛杉矶）；去掉「港」后缀；原文未出现则为空"
               required: false
             - name: cargo_name
               type: string
@@ -100,14 +100,6 @@ workflow:
             - name: cargo_spec
               type: string
               description: "货品规格原文，如约1,200KG，6CBM"
-              required: false
-            - name: quote_amount
-              type: number
-              description: "报价金额浮点数；多金额取第一个；无法抽取则为 0"
-              required: false
-            - name: quote_currency
-              type: string
-              description: "与所选金额对齐的货币符号，如 ¥/$/€；无金额则为空"
               required: false
             - name: quote_terms
               type: string
@@ -146,8 +138,6 @@ workflow:
                 dest_port_zh: str = None,
                 cargo_name: str = None,
                 cargo_spec: str = None,
-                quote_amount=None,
-                quote_currency: str = None,
                 quote_terms: str = None,
                 service_scope: str = None,
             ) -> dict:
@@ -159,19 +149,6 @@ workflow:
                         return ""
                     return text
 
-                def as_amount(value):
-                    if value is None or value == "":
-                        return 0.0
-                    try:
-                        if isinstance(value, str):
-                            cleaned = value.replace(",", "").replace(" ", "").strip()
-                            if cleaned == "":
-                                return 0.0
-                            return float(cleaned)
-                        return float(value)
-                    except (TypeError, ValueError):
-                        return 0.0
-
                 payload = {
                     "customer_name": as_str(customer_name),
                     "logistics_type": as_str(logistics_type),
@@ -182,8 +159,6 @@ workflow:
                     "dest_port_zh": as_str(dest_port_zh),
                     "cargo_name": as_str(cargo_name),
                     "cargo_spec": as_str(cargo_spec),
-                    "quote_amount": as_amount(quote_amount),
-                    "quote_currency": as_str(quote_currency),
                     "quote_terms": as_str(quote_terms),
                     "service_scope": as_str(service_scope),
                 }
@@ -207,10 +182,6 @@ workflow:
               value_selector: [extract_fields, cargo_name]
             - variable: cargo_spec
               value_selector: [extract_fields, cargo_spec]
-            - variable: quote_amount
-              value_selector: [extract_fields, quote_amount]
-            - variable: quote_currency
-              value_selector: [extract_fields, quote_currency]
             - variable: quote_terms
               value_selector: [extract_fields, quote_terms]
             - variable: service_scope
