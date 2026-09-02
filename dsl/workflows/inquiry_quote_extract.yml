@@ -2,7 +2,7 @@ version: "0.7.0"
 kind: app
 app:
   name: "询价字段抽取"
-  description: "从客户询价文本中抽出固定 11 键业务字段，并以严格 JSON 字符串输出"
+  description: "从客户询价文本中抽出固定 11 键业务字段（含置信度），并以严格 JSON 字符串输出"
   icon: "📦"
   icon_type: emoji
   icon_background: "#E4FBCC"
@@ -43,20 +43,26 @@ workflow:
           type: parameter-extractor
           title: "抽取询价字段"
           instruction: |
-            输入是客户询价原文。只抽取原文中出现的信息，禁止臆造港口代码、中文译名或公司名。
+            输入是客户询价原文。只抽取原文中出现的信息，禁止臆造代码、译名或公司名。
+            每个业务字段须同时输出值与置信度（{field}_confidence），仅允许「置信高」「置信中」「置信低」。
+            先定 value，再定 confidence；不得所有非空字段一律标置信高。未出现 → value 为空字符串，confidence 为置信低。
 
-            字段规则：
+            业务字段规则：
             - customer_name：取文本中最先出现的公司名。
-            - logistics_type：仅输出「海运」「空运」或「陆运」；同义归一（如 ocean/sea freight→海运，air freight→空运，陆运/汽运/卡车/公路运输/land/trucking→陆运）；一文同时出现时取先出现的那个；无法判断输出空字符串。
-            - urgency_level：仅输出「紧急」或「普通」；未提及输出空字符串。出现加急/紧急/ASAP/急单等信号为「紧急」；与「不急」并存时仍取「紧急」；仅有普通/不急等信号则为「普通」。不要把未提及默认成「普通」。
-            - origin_port_en / dest_port_en：起运地、目的地的英文名或国际港口代码（UN/LOCODE，通常 5 位字母，如 CNNGB、USLAX、CNSHA），原样保留，不要当公司名或货号丢掉。
-            - origin_port_zh / dest_port_zh：起运地、目的地的中文地名（城市/地区），不限于港口；只输出地名本身，去掉「港」字（如「宁波港」→「宁波」、「洛杉矶港」→「洛杉矶」）；陆运场景同样适用（如「汽运至上海」→ dest_port_zh 为「上海」）。合写如「CNNGB/宁波」拆成代码与中文；分行并列同样拆开；「A → B」箭头前为起运、后为目的。只出现代码则中文侧为空；只出现中文则代码侧为空。禁止根据地名补全未出现的代码，也禁止根据代码补全未出现的译名。
+            - transport_mode：仅输出「海运 FCL」「海运 LCL」「空运」「铁路」「公路」「快递」「多式联运」之一。同义归一：FCL/整箱→海运 FCL，LCL/拼箱→海运 LCL，空运/air/航空→空运，铁路/铁运/rail→铁路，公路/汽运/卡车/陆运/trucking→公路，快递/express→快递，多式联运/海铁/海空→多式联运。仅写「海运」未区分 FCL/LCL 时输出空字符串，禁止猜测。多方式并存取先出现。
+            - urgency_level：仅输出「普通」或「加急」；未提及输出空字符串，禁止默认普通。紧急/急单/ASAP→加急；普通/不急/正常时效→普通；冲突时任一加急信号则加急。
+            - trade_terms：仅输出 EXW、FCA、CPT、CIP、DAP、DPU、DDP、FAS、FOB、CFR、CIF 之一（大写）；多条款取最先出现的可映射条款；小写或带标点可归一。
+            - origin_port_en / dest_port_en：起运/目的地英文或标准代码侧。能用英文或代码的尽量填本侧。收录：UN/LOCODE（如 CNNGB）、IATA 机场码（如 PVG、LAX）、铁路电报码（如 VNP、EAY）、UIC 码、英文站名/城市名、邮编等拉丁标识；原样保留。合写如 VNP/北京南、CNNGB/宁波、Beijing South/北京南 → en 取代码或英文，zh 取中文。路线 A→B 前起运后目的。仅中文无拉丁标识 → en 为空；禁止由中文翻译补英文。
+            - origin_port_zh / dest_port_zh：起运/目的地中文侧。去掉交通设施后缀：港、机场、国际机场、站、火车站、高铁站。陆运/铁路/快递场景同样适用。禁止由代码反推中文。
             - cargo_name：货物品名原文。
-            - cargo_spec：规格原文（如约1,200KG，6CBM）。
-            - quote_terms：多条款只取第一个条款词；不擅自标准化缩写。
+            - cargo_spec：规格原文（重量/体积/件数等）。
             - service_scope：原文服务项；多项用「 / 」（两侧各一空格）连接。
 
-            字符串未出现 → 空字符串。
+            置信度规则（逐字段独立判定）：
+            - 置信高：原文直接出现该值，或封闭枚举完整出现（如「海运 FCL」「CIF」）。
+            - 置信中：同义归一、合写拆分、路线推断、冲突消解（如汽运→公路、正常时效→普通）；封闭枚举经同义归一时不得标置信高。
+            - 置信低：value 为空；无法判断；角色混淆；仅一侧有值时另一侧为空（禁止补全的一侧）。
+            - 起运/目的地：合写拆分 en/zh 均有值可标高；仅中文时 zh 高或中、en 置信低；仅代码/英文时 en 高或中、zh 置信低。
           model:
             provider: langgenius/tongyi/tongyi
             name: qwen3.7-plus
@@ -69,45 +75,89 @@ workflow:
               type: string
               description: "文本中最先出现的公司名；未出现则为空字符串"
               required: false
-            - name: logistics_type
+            - name: customer_name_confidence
               type: string
-              description: "仅「海运」「空运」或「陆运」；无法判断为空字符串"
+              description: "customer_name 的置信度：置信高、置信中或置信低"
+              required: false
+            - name: transport_mode
+              type: string
+              description: "仅海运 FCL、海运 LCL、空运、铁路、公路、快递、多式联运；无法判断为空"
+              required: false
+            - name: transport_mode_confidence
+              type: string
+              description: "transport_mode 的置信度：置信高、置信中或置信低"
               required: false
             - name: urgency_level
               type: string
-              description: "仅「紧急」或「普通」；未提及为空字符串"
+              description: "仅普通或加急；未提及为空字符串"
+              required: false
+            - name: urgency_level_confidence
+              type: string
+              description: "urgency_level 的置信度：置信高、置信中或置信低"
               required: false
             - name: origin_port_en
               type: string
-              description: "起运地英文名或国际港口代码（UN/LOCODE，如 CNNGB）；原文未出现则为空"
+              description: "起运地英文或标准代码（UN/LOCODE、IATA、铁路电报码等）；原文未出现则为空"
+              required: false
+            - name: origin_port_en_confidence
+              type: string
+              description: "origin_port_en 的置信度：置信高、置信中或置信低"
               required: false
             - name: origin_port_zh
               type: string
-              description: "起运地中文地名（如宁波）；去掉「港」后缀；原文未出现则为空"
+              description: "起运地中文地名；去掉港/机场/站等后缀；原文未出现则为空"
+              required: false
+            - name: origin_port_zh_confidence
+              type: string
+              description: "origin_port_zh 的置信度：置信高、置信中或置信低"
               required: false
             - name: dest_port_en
               type: string
-              description: "目的地英文名或国际港口代码（UN/LOCODE，如 USLAX）；原文未出现则为空"
+              description: "目的地英文或标准代码；原文未出现则为空"
+              required: false
+            - name: dest_port_en_confidence
+              type: string
+              description: "dest_port_en 的置信度：置信高、置信中或置信低"
               required: false
             - name: dest_port_zh
               type: string
-              description: "目的地中文地名（如洛杉矶）；去掉「港」后缀；原文未出现则为空"
+              description: "目的地中文地名；去掉港/机场/站等后缀；原文未出现则为空"
+              required: false
+            - name: dest_port_zh_confidence
+              type: string
+              description: "dest_port_zh 的置信度：置信高、置信中或置信低"
               required: false
             - name: cargo_name
               type: string
               description: "货物品名原文"
               required: false
+            - name: cargo_name_confidence
+              type: string
+              description: "cargo_name 的置信度：置信高、置信中或置信低"
+              required: false
             - name: cargo_spec
               type: string
-              description: "货品规格原文，如约1,200KG，6CBM"
+              description: "货品规格原文"
               required: false
-            - name: quote_terms
+            - name: cargo_spec_confidence
               type: string
-              description: "第一个贸易条款词，如 CIF；未出现则为空"
+              description: "cargo_spec 的置信度：置信高、置信中或置信低"
+              required: false
+            - name: trade_terms
+              type: string
+              description: "贸易条款，仅 EXW/FCA/CPT/CIP/DAP/DPU/DDP/FAS/FOB/CFR/CIF；未出现则为空"
+              required: false
+            - name: trade_terms_confidence
+              type: string
+              description: "trade_terms 的置信度：置信高、置信中或置信低"
               required: false
             - name: service_scope
               type: string
               description: "服务项原文；多项用「 / 」连接"
+              required: false
+            - name: service_scope_confidence
+              type: string
+              description: "service_scope 的置信度：置信高、置信中或置信低"
               required: false
           query: [start, inquiry_text]
           reasoning_mode: prompt
@@ -127,65 +177,152 @@ workflow:
           code_language: python3
           code: |
             import json
+            import re
+
+            ALLOWED_TRANSPORT = {
+                "海运 FCL", "海运 LCL", "空运", "铁路", "公路", "快递", "多式联运"
+            }
+            ALLOWED_TRADE_TERMS = {
+                "EXW", "FCA", "CPT", "CIP", "DAP", "DPU", "DDP", "FAS", "FOB", "CFR", "CIF"
+            }
+            ALLOWED_URGENCY = {"普通", "加急"}
+            ALLOWED_CONFIDENCE = {"置信高", "置信中", "置信低"}
+            ENUM_FIELDS = {
+                "transport_mode": ALLOWED_TRANSPORT,
+                "trade_terms": ALLOWED_TRADE_TERMS,
+                "urgency_level": ALLOWED_URGENCY,
+            }
+            ZH_LOCATION_FIELDS = {"origin_port_zh", "dest_port_zh"}
+            ZH_SUFFIXES = ("国际机场", "火车站", "高铁站", "机场", "港", "站")
+            FIELD_ORDER = [
+                "customer_name", "transport_mode", "urgency_level",
+                "origin_port_en", "origin_port_zh", "dest_port_en", "dest_port_zh",
+                "cargo_name", "cargo_spec", "trade_terms", "service_scope",
+            ]
+
+            def as_str(value):
+                if value is None:
+                    return ""
+                text = str(value).strip()
+                if text.lower() in ("none", "null"):
+                    return ""
+                return text
+
+            def normalize_zh_location(value):
+                text = value
+                for suffix in ZH_SUFFIXES:
+                    if text.endswith(suffix) and len(text) > len(suffix):
+                        text = text[: -len(suffix)]
+                        break
+                return text.strip()
+
+            def normalize_trade_terms(value):
+                text = value.upper()
+                text = re.sub(r"[^A-Z]", "", text)
+                return text
+
+            def pack_field(name, value, confidence):
+                value = as_str(value)
+                confidence = as_str(confidence)
+                if confidence not in ALLOWED_CONFIDENCE:
+                    confidence = "置信低"
+                if name in ZH_LOCATION_FIELDS and value:
+                    value = normalize_zh_location(value)
+                if name == "trade_terms" and value:
+                    value = normalize_trade_terms(value)
+                if name in ENUM_FIELDS:
+                    if value and value not in ENUM_FIELDS[name]:
+                        value = ""
+                        confidence = "置信低"
+                if value == "":
+                    confidence = "置信低"
+                return {"value": value, "confidence": confidence}
 
             def main(
                 customer_name: str = None,
-                logistics_type: str = None,
+                customer_name_confidence: str = None,
+                transport_mode: str = None,
+                transport_mode_confidence: str = None,
                 urgency_level: str = None,
+                urgency_level_confidence: str = None,
                 origin_port_en: str = None,
+                origin_port_en_confidence: str = None,
                 origin_port_zh: str = None,
+                origin_port_zh_confidence: str = None,
                 dest_port_en: str = None,
+                dest_port_en_confidence: str = None,
                 dest_port_zh: str = None,
+                dest_port_zh_confidence: str = None,
                 cargo_name: str = None,
+                cargo_name_confidence: str = None,
                 cargo_spec: str = None,
-                quote_terms: str = None,
+                cargo_spec_confidence: str = None,
+                trade_terms: str = None,
+                trade_terms_confidence: str = None,
                 service_scope: str = None,
+                service_scope_confidence: str = None,
             ) -> dict:
-                def as_str(value):
-                    if value is None:
-                        return ""
-                    text = str(value).strip()
-                    if text.lower() in ("none", "null"):
-                        return ""
-                    return text
-
-                payload = {
-                    "customer_name": as_str(customer_name),
-                    "logistics_type": as_str(logistics_type),
-                    "urgency_level": as_str(urgency_level),
-                    "origin_port_en": as_str(origin_port_en),
-                    "origin_port_zh": as_str(origin_port_zh),
-                    "dest_port_en": as_str(dest_port_en),
-                    "dest_port_zh": as_str(dest_port_zh),
-                    "cargo_name": as_str(cargo_name),
-                    "cargo_spec": as_str(cargo_spec),
-                    "quote_terms": as_str(quote_terms),
-                    "service_scope": as_str(service_scope),
-                }
+                values = [
+                    customer_name, transport_mode, urgency_level,
+                    origin_port_en, origin_port_zh, dest_port_en, dest_port_zh,
+                    cargo_name, cargo_spec, trade_terms, service_scope,
+                ]
+                confidences = [
+                    customer_name_confidence, transport_mode_confidence, urgency_level_confidence,
+                    origin_port_en_confidence, origin_port_zh_confidence,
+                    dest_port_en_confidence, dest_port_zh_confidence,
+                    cargo_name_confidence, cargo_spec_confidence,
+                    trade_terms_confidence, service_scope_confidence,
+                ]
+                payload = {}
+                for name, val, conf in zip(FIELD_ORDER, values, confidences):
+                    payload[name] = pack_field(name, val, conf)
                 return {"result_json": json.dumps(payload, ensure_ascii=False)}
           variables:
             - variable: customer_name
               value_selector: [extract_fields, customer_name]
-            - variable: logistics_type
-              value_selector: [extract_fields, logistics_type]
+            - variable: customer_name_confidence
+              value_selector: [extract_fields, customer_name_confidence]
+            - variable: transport_mode
+              value_selector: [extract_fields, transport_mode]
+            - variable: transport_mode_confidence
+              value_selector: [extract_fields, transport_mode_confidence]
             - variable: urgency_level
               value_selector: [extract_fields, urgency_level]
+            - variable: urgency_level_confidence
+              value_selector: [extract_fields, urgency_level_confidence]
             - variable: origin_port_en
               value_selector: [extract_fields, origin_port_en]
+            - variable: origin_port_en_confidence
+              value_selector: [extract_fields, origin_port_en_confidence]
             - variable: origin_port_zh
               value_selector: [extract_fields, origin_port_zh]
+            - variable: origin_port_zh_confidence
+              value_selector: [extract_fields, origin_port_zh_confidence]
             - variable: dest_port_en
               value_selector: [extract_fields, dest_port_en]
+            - variable: dest_port_en_confidence
+              value_selector: [extract_fields, dest_port_en_confidence]
             - variable: dest_port_zh
               value_selector: [extract_fields, dest_port_zh]
+            - variable: dest_port_zh_confidence
+              value_selector: [extract_fields, dest_port_zh_confidence]
             - variable: cargo_name
               value_selector: [extract_fields, cargo_name]
+            - variable: cargo_name_confidence
+              value_selector: [extract_fields, cargo_name_confidence]
             - variable: cargo_spec
               value_selector: [extract_fields, cargo_spec]
-            - variable: quote_terms
-              value_selector: [extract_fields, quote_terms]
+            - variable: cargo_spec_confidence
+              value_selector: [extract_fields, cargo_spec_confidence]
+            - variable: trade_terms
+              value_selector: [extract_fields, trade_terms]
+            - variable: trade_terms_confidence
+              value_selector: [extract_fields, trade_terms_confidence]
             - variable: service_scope
               value_selector: [extract_fields, service_scope]
+            - variable: service_scope_confidence
+              value_selector: [extract_fields, service_scope_confidence]
           outputs:
             result_json:
               type: string
