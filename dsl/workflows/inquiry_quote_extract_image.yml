@@ -1,9 +1,9 @@
 version: "0.7.0"
 kind: app
 app:
-  name: "询价字段抽取"
-  description: "从客户询价文本中抽出固定 11 键业务字段（含置信度），并以严格 JSON 字符串输出"
-  icon: "📦"
+  name: "询价图片字段抽取"
+  description: "从客户询价图片中转写可见文字并抽出固定 11 键业务字段（含置信度），以严格 JSON 字符串输出"
+  icon: "🖼️"
   icon_type: emoji
   icon_background: "#E4FBCC"
   mode: workflow
@@ -24,13 +24,18 @@ workflow:
         type: custom
         data:
           type: start
-          title: "询价输入"
+          title: "询价图片输入"
           variables:
-            - label: "询价内容"
-              variable: inquiry_text
-              type: paragraph
+            - label: "询价图片"
+              variable: inquiry_image
+              type: file
               required: true
-              max_length: 10000
+              allowed_file_types:
+                - image
+              allowed_file_extensions: []
+              allowed_file_upload_methods:
+                - local_file
+                - remote_url
             - label: "是否模糊匹配客户名称"
               variable: fuzzy_match_customer
               type: number
@@ -43,13 +48,50 @@ workflow:
         targetPosition: left
         width: 244
         height: 90
+      - id: read_image
+        type: custom
+        data:
+          type: llm
+          title: "转写图片文字"
+          model:
+            provider: langgenius/tongyi/tongyi
+            name: qwen3-vl-plus
+            mode: chat
+            completion_params:
+              temperature: 0.1
+              enable_thinking: false
+          prompt_template:
+            - id: read-system
+              role: system
+              text: |
+                你是询价图片转写员。只把图中可见文字按阅读顺序（上到下、左到右）原样写出。
+                保留中英文、数字、代码、邮箱、标点与换行。手写同样转写。
+                看不清的字不要猜、不要补全、不要翻译、不要解释、不要补港口码或公司名。
+                不要抽取字段，不要加标题或 Markdown。图中无字则输出空。
+            - id: read-user
+              role: user
+              text: "请转写这张询价图片中的全部可见文字。图片已通过视觉输入提供。"
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: true
+            configs:
+              detail: high
+              variable_selector: [start, inquiry_image]
+        position: {x: 320, y: 240}
+        positionAbsolute: {x: 320, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
       - id: extract_fields
         type: custom
         data:
           type: parameter-extractor
           title: "抽取询价字段"
           instruction: |
-            输入是客户询价原文。只抽取原文中出现的信息，禁止臆造代码、译名或公司名。
+            输入是询价图片的转写文本。只抽取转写文本中出现的信息，禁止臆造代码、译名或公司名。
             每个业务字段须同时输出值与置信度（{field}_confidence），仅允许「置信高」「置信中」「置信低」。
             先定 value，再定 confidence；不得所有非空字段一律标置信高。未出现 → value 为空字符串，confidence 为置信低。
 
@@ -176,12 +218,12 @@ workflow:
               type: string
               description: "service_scope 的置信度：置信高、置信中或置信低"
               required: false
-          query: [start, inquiry_text]
+          query: [read_image, text]
           reasoning_mode: prompt
           vision:
             enabled: false
-        position: {x: 360, y: 240}
-        positionAbsolute: {x: 360, y: 240}
+        position: {x: 600, y: 240}
+        positionAbsolute: {x: 600, y: 240}
         sourcePosition: right
         targetPosition: left
         width: 244
@@ -358,7 +400,7 @@ workflow:
                 return {"result_json": json.dumps(payload, ensure_ascii=False)}
           variables:
             - variable: inquiry_text
-              value_selector: [start, inquiry_text]
+              value_selector: [read_image, text]
             - variable: fuzzy_match_customer
               value_selector: [start, fuzzy_match_customer]
             - variable: customer_name
@@ -413,8 +455,8 @@ workflow:
             result_json:
               type: string
               children: null
-        position: {x: 680, y: 240}
-        positionAbsolute: {x: 680, y: 240}
+        position: {x: 880, y: 240}
+        positionAbsolute: {x: 880, y: 240}
         sourcePosition: right
         targetPosition: left
         width: 244
@@ -428,20 +470,27 @@ workflow:
             - variable: result_json
               value_selector: [build_json, result_json]
               value_type: string
-        position: {x: 1000, y: 240}
-        positionAbsolute: {x: 1000, y: 240}
+        position: {x: 1160, y: 240}
+        positionAbsolute: {x: 1160, y: 240}
         sourcePosition: right
         targetPosition: left
         width: 244
         height: 90
     edges:
-      - id: start-source-extract_fields-target
+      - id: start-source-read_image-target
         source: start
+        sourceHandle: source
+        target: read_image
+        targetHandle: target
+        type: custom
+        data: {sourceType: start, targetType: llm, isInIteration: false, isInLoop: false}
+      - id: read_image-source-extract_fields-target
+        source: read_image
         sourceHandle: source
         target: extract_fields
         targetHandle: target
         type: custom
-        data: {sourceType: start, targetType: parameter-extractor, isInIteration: false, isInLoop: false}
+        data: {sourceType: llm, targetType: parameter-extractor, isInIteration: false, isInLoop: false}
       - id: extract_fields-source-build_json-target
         source: extract_fields
         sourceHandle: source

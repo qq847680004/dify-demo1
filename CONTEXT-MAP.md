@@ -2,7 +2,7 @@
 
 ## Contexts
 
-- [询价字段抽取](./CONTEXT.md) — 从非结构化询价文本抽出固定业务字段
+- [询价字段抽取](./CONTEXT.md) — 从非结构化询价文本或图片抽出固定业务字段（DSL：`inquiry_intent_classify.yml`、`inquiry_quote_extract.yml`、`inquiry_quote_extract_image.yml`）
 - [BtoB 电商客服](./docs/b2b-ecommerce/CONTEXT.md) — 按企业知识库回答采购方企业的咨询
 - [可溯源 AI 智助箱](./docs/traceable-ai-assistant/CONTEXT.md) — 按运价/港口/货关/案例库为内部业务员作答
 

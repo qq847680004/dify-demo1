@@ -1,0 +1,164 @@
+version: "0.7.0"
+kind: app
+app:
+  name: "询价意图识别"
+  description: "判断待判文本（通常为电子邮件）是否为询价需求，输出布尔 is_inquiry"
+  icon: "📧"
+  icon_type: emoji
+  icon_background: "#E4FBCC"
+  mode: workflow
+  use_icon_as_answer_icon: false
+dependencies:
+  - current_identifier: null
+    type: marketplace
+    value:
+      marketplace_plugin_unique_identifier: langgenius/tongyi:0.2.15@1df8bd27d67c149e6db3c210830ef6e3857c5a9df5e8edbe9e785b995f337ef5
+      version: null
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features: {}
+  graph:
+    nodes:
+      - id: start
+        type: custom
+        data:
+          type: start
+          title: "待判输入"
+          variables:
+            - label: "待判文本"
+              variable: source_text
+              type: paragraph
+              required: true
+              max_length: 10000
+        position: {x: 40, y: 240}
+        positionAbsolute: {x: 40, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 90
+      - id: classify_intent
+        type: custom
+        data:
+          type: parameter-extractor
+          title: "判断询价需求"
+          instruction: |
+            输入是整段待判文本（通常是电子邮件，可含主题、正文、签名、转发链）。只判断商业意图是不是向本方（物流/货代）索取运价、费用或报价。不要判断「像不像邮件」。签名、免责声明、页脚单独出现不算询价。无法判断则输出 false。
+
+            输出 true：
+            - 询盘/询价/请报价/请报运价/请给 rate/quotation/RFQ/帮忙看看价格
+            - 给出货盘并问费用（要素不全也算）
+            - 催报价、追问何时出价格
+            - 对尚未成交的运价还价、再优惠、再报一版
+            - 长邮件或转发链中任一处有未完成的索价（即使同时有订舱/对账）
+
+            输出 false：
+            - 空、纯签名、乱码、闲聊
+            - 营销、会议邀请、系统通知
+            - 纯操作且不再要价：订舱确认、补料、报关资料、改单、放货
+            - 轨迹/POD/到货查询
+            - 对账、发票、付款、催款
+            - 投诉索赔且无报价诉求
+            - 报价单/运价表正文且收件方只致谢或收到、没有新的要价
+            - 只问做不做某航线/某产品、不要价格
+
+            例 true：有一批货要走美国，大概 200kg，空运能帮忙看看价格吗？
+            例 true：对账那票下周处理。另外再询一票：上海到汉堡，LCL 3CBM，请报价。
+            例 false：请按上周确认的运价帮我订舱，SO 附件已发。
+            例 false：这票货到哪了？提单号 EGLV123，请发最新动态。
+          model:
+            provider: langgenius/tongyi/tongyi
+            name: qwen3.7-flash
+            mode: chat
+            completion_params:
+              temperature: 0.1
+              enable_thinking: false
+          parameters:
+            - name: is_inquiry
+              type: boolean
+              description: "待判文本是否为询价需求；无法判断则为 false"
+              required: true
+          query: [start, source_text]
+          reasoning_mode: prompt
+          vision:
+            enabled: false
+        position: {x: 360, y: 240}
+        positionAbsolute: {x: 360, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 98
+      - id: normalize_result
+        type: custom
+        data:
+          type: code
+          title: "归一布尔结果"
+          code_language: python3
+          code: |
+            def _is_true(value):
+                if value is True:
+                    return True
+                if value is False or value is None:
+                    return False
+                if value == 1:
+                    return True
+                text = str(value).strip().lower()
+                return text in ("true", "1", "yes")
+
+            def main(raw_flag=None, ok=None) -> dict:
+                if not _is_true(ok):
+                    return {"is_inquiry": False}
+                return {"is_inquiry": _is_true(raw_flag)}
+          variables:
+            - variable: raw_flag
+              value_selector: [classify_intent, is_inquiry]
+            - variable: ok
+              value_selector: [classify_intent, __is_success]
+          outputs:
+            is_inquiry:
+              type: boolean
+              children: null
+        position: {x: 680, y: 240}
+        positionAbsolute: {x: 680, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 100
+      - id: end
+        type: custom
+        data:
+          type: end
+          title: "输出判定"
+          outputs:
+            - variable: is_inquiry
+              value_selector: [normalize_result, is_inquiry]
+              value_type: boolean
+        position: {x: 1000, y: 240}
+        positionAbsolute: {x: 1000, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 90
+    edges:
+      - id: start-source-classify_intent-target
+        source: start
+        sourceHandle: source
+        target: classify_intent
+        targetHandle: target
+        type: custom
+        data: {sourceType: start, targetType: parameter-extractor, isInIteration: false, isInLoop: false}
+      - id: classify_intent-source-normalize_result-target
+        source: classify_intent
+        sourceHandle: source
+        target: normalize_result
+        targetHandle: target
+        type: custom
+        data: {sourceType: parameter-extractor, targetType: code, isInIteration: false, isInLoop: false}
+      - id: normalize_result-source-end-target
+        source: normalize_result
+        sourceHandle: source
+        target: end
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: end, isInIteration: false, isInLoop: false}
+    viewport: {x: 0, y: 0, zoom: 0.8}

@@ -16,13 +16,13 @@
 
 | 项 | v1 | v2 |
 | --- | --- | --- |
-| 运输方式字段 | `logistics_type`：`海运`/`空运`/`陆运` | `transport_mode`：7 档封闭枚举（见下表） |
+| 运输方式字段 | `logistics_type`：`海运`/`空运`/`陆运` | `transport_mode`：5 档封闭枚举（`空运`/`海运`/`铁运`/`汽运`/`多式联运`） |
 | 贸易条款字段 | `quote_terms`：原文第一个条款词 | `trade_terms`：12 个 Incoterms 缩写封闭枚举 |
 | 紧急程度 | `urgency_level`：`紧急`/`普通` | `urgency_level`：`普通`/`加急`（**Breaking**：`紧急` 归一为 `加急`） |
 | 输出形状 | 11 键平铺字符串 | 11 键，每键 `{ value, confidence }` |
 | 图结构 | 4 节点 | 仍为 4 节点（不增 LLM） |
 
-**Breaking change：** API 消费方若已对接 v1 的 `result_json` 平铺结构，须同步升级解析逻辑。
+**Breaking change：** API 消费方若已对接 v1 的 `result_json` 平铺结构，须同步升级解析逻辑。运输方式相对本计划原稿 7 档：取消 `海运 FCL`/`海运 LCL` 与 `快递`；`铁路` 改为 `铁运`，`公路` 改为 `汽运`；仅写「海运」现输出 `海运`。
 
 ---
 
@@ -48,7 +48,7 @@
 | 业务字段 | 变量名 | 类型 | 取值约定 | 缺失时 `value` |
 | --- | --- | --- | --- | --- |
 | 客户名称 | `customer_name` | string | 文本中**最先出现**的公司名 | `""` |
-| 运输方式 | `transport_mode` | string | **仅**下表 7 值；同义归一后映射；无法判断 `""` | `""` |
+| 运输方式 | `transport_mode` | string | **仅**下表 5 值；同义归一后映射；无法判断 `""` | `""` |
 | 紧急程度 | `urgency_level` | string | **仅** `普通` 或 `加急`；未提及 `""` | `""` |
 | 起运地英文/代码 | `origin_port_en` | string | 原文出现的**英文或标准代码**（见下节）；**有英文/代码时优先填本侧**；禁止臆造 | `""` |
 | 起运地中文 | `origin_port_zh` | string | 原文中文地名；去掉交通设施后缀（港/机场/站等） | `""` |
@@ -61,22 +61,20 @@
 
 ### 封闭枚举（`code` 节点须硬校验）
 
-**运输方式 `transport_mode`（仅此 7 值，大小写与空格须完全一致）：**
+**运输方式 `transport_mode`（仅此 5 值，大小写与空格须完全一致）：**
 
-`海运 FCL`、`海运 LCL`、`空运`、`铁路`、`公路`、`快递`、`多式联运`
+`空运`、`海运`、`铁运`、`汽运`、`多式联运`
 
 同义归一指引（写入 `extract_fields.instruction`，实施时细化）：
 
 | 原文信号（示例） | 归一结果 |
 | --- | --- |
-| FCL、整箱、海运整箱、full container | `海运 FCL` |
-| LCL、拼箱、海运拼箱、less than container | `海运 LCL` |
-| 海运（未区分 FCL/LCL）、ocean、sea freight | 无法区分时 `""`（**禁止**臆猜 FCL/LCL） |
 | 空运、air freight、航空 | `空运` |
-| 铁路、铁运、rail | `铁路` |
-| 公路、汽运、卡车、陆运、trucking、land | `公路` |
-| 快递、特快、express、courier | `快递` |
+| 海运、ocean、sea freight、FCL、LCL、整箱、拼箱、海运整箱、海运拼箱 | `海运` |
+| 铁运、铁路、rail | `铁运` |
+| 汽运、公路、卡车、陆运、trucking、land | `汽运` |
 | 多式联运、海铁、海空、联运 | `多式联运` |
+| 快递、特快、express、courier（未同时出现五档之一） | `""`（五档外，禁止映射为汽运或空运） |
 
 **贸易条款 `trade_terms`（仅此 12 值，大写）：**
 
@@ -117,10 +115,10 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 
 | 运输方式 | 典型英文/代码标识 | 示例 |
 | --- | --- | --- |
-| 海运 FCL / 海运 LCL | UN/LOCODE（通常 5 位字母）、英文港口/码头/城市名 | `CNNGB`、`USLAX`、`Ningbo`、`Los Angeles` |
+| 海运 | UN/LOCODE（通常 5 位字母）、英文港口/码头/城市名 | `CNNGB`、`USLAX`、`Ningbo`、`Los Angeles` |
 | 空运 | IATA 三字机场码、英文机场/城市名 | `PVG`、`CAN`、`LAX`、`Shanghai Pudong` |
-| 铁路 | **铁路电报码**（国铁常用 3 位字母）、**UIC 位置码**（国际铁路 7 位数字，原文出现才填）、**英文站名**、**拼音/罗马化站名**（原文出现才填） | `VNP`（北京南）、`EAY`（西安北）、`8600652`（UIC，若原文写出）、`Beijing South`、`Xi'an North`、`Chengdu South` |
-| 公路 / 快递 | 英文城市/区县名、邮编、门点英文地址片段 | `Suzhou`、`Pudong`、`Shanghai`、`200120` |
+| 铁运 | **铁路电报码**（国铁常用 3 位字母）、**UIC 位置码**（国际铁路 7 位数字，原文出现才填）、**英文站名**、**拼音/罗马化站名**（原文出现才填） | `VNP`（北京南）、`EAY`（西安北）、`8600652`（UIC，若原文写出）、`Beijing South`、`Xi'an North`、`Chengdu South` |
+| 汽运 | 英文城市/区县名、邮编、门点英文地址片段 | `Suzhou`、`Pudong`、`Shanghai`、`200120` |
 | 多式联运 | 各段按原文实际标识；可异构（起运港口码 + 目的机场码 / 铁路码） | `CNNGB` + `FRA`；`VNP` + `LAX` |
 
 铁路补充说明：
@@ -145,8 +143,8 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 | --- | --- | --- |
 | 海运港口 | 港口所在城市/地区名 | `宁波港`→`宁波` |
 | 空运 | 机场所在城市或原文地名 | `浦东机场`→`浦东`；`上海浦东国际机场`→按原文最短合理地名 `浦东` 或 `上海`（与原文一致优先） |
-| 铁路 | 站所在城市或站名 | `北京南站`→`北京南`；`郑州站`→`郑州` |
-| 公路/快递 | 城市、区县、乡镇 | `昆山市`→`昆山`；`送至上海`→`上海` |
+| 铁运 | 站所在城市或站名 | `北京南站`→`北京南`；`郑州站`→`郑州` |
+| 汽运 | 城市、区县、乡镇 | `昆山市`→`昆山`；`送至上海`→`上海` |
 | 门点地址 | 取原文中的**最小可识别地名**（市/区/县），不扩写完整地址 | `苏州工业园区`→`苏州工业园区`（原文子串） |
 
 - 去掉后缀仅当原文含交通设施词：`港`、`机场`、`国际机场`、`站`、`火车站`、`高铁站`；**不**去掉行政区划词（市、区、县）。
@@ -159,11 +157,11 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 | 已识别 `transport_mode` 且原文地点表述单一 | 按上表理解代码类型，正常抽取 |
 | 未识别 `transport_mode`（`""`） | 仍可从原文抽地点；代码类型按**原文形态**判断（3 位大写→倾向 IATA，5 位→倾向 UN/LOCODE），**不**因形态猜测而改写 value |
 | 多式联运且起运/目的代码类型不同 | 各侧独立填写，允许起运 `CNNGB` + 目的 `PVG` |
-| 公路/快递仅中文门点 | zh 有值；en 为 `""`（**不**把「上海」译成 `Shanghai`） |
-| 铁路原文含电报码/英文站名 | en 填代码或英文，zh 填中文（合写则拆分） | 
-| 铁路原文仅中文站名 | zh 有值；en 为 `""` |
+| 汽运仅中文门点 | zh 有值；en 为 `""`（**不**把「上海」译成 `Shanghai`） |
+| 铁运原文含电报码/英文站名 | en 填代码或英文，zh 填中文（合写则拆分） | 
+| 铁运原文仅中文站名 | zh 有值；en 为 `""` |
 
-**结论：可以一起识别。** 同一套四字段（`origin_port_en/zh`、`dest_port_en/zh`）覆盖海运/空运/铁路/公路/快递/多式联运；差异体现在原文出现何种标识，而非拆成多套字段。`code` 节点**不**校验地点码制白名单（避免误杀 IATA/铁路码），只做 strip、中文后缀规范化与空值降级。
+**结论：可以一起识别。** 同一套四字段（`origin_port_en/zh`、`dest_port_en/zh`）覆盖空运/海运/铁运/汽运/多式联运；差异体现在原文出现何种标识，而非拆成多套字段。`code` 节点**不**校验地点码制白名单（避免误杀 IATA/铁路码），只做 strip、中文后缀规范化、运输方式别名归一与空值降级。
 
 ---
 
@@ -188,7 +186,7 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 | 字段 | 置信高 | 置信中 | 置信低 |
 | --- | --- | --- | --- |
 | `customer_name` | 原文出现带公司后缀的完整名称（如「××有限公司」）；或「客户：」「公司：」等标签后紧邻的名称与输出一致 | 首段/首行出现的机构名但无明确标签；或去掉「客户：」前缀后与原文子串匹配 | `value=""`；仅有人名、部门、品牌而无公司主体；多个公司名且「先出现」规则无法适用；从货代/承运商签名推断而非询价方 |
-| `transport_mode` | 原文完整出现七档枚举之一（如「海运 FCL」「空运」） | 同义归一得到（如 `FCL`→`海运 FCL`、`汽运`→`公路`、`航空`→`空运`）；一文多种运输方式但已按**先出现**取定 | `value=""`；仅写「海运」未区分 FCL/LCL；多种方式并存且先后顺序不明；枚举外被 `code` 清空 |
+| `transport_mode` | 原文完整出现五档枚举之一（如「海运」「空运」「汽运」） | 同义归一得到（如 `FCL`/`整箱`→`海运`、`铁路`→`铁运`、`公路`→`汽运`、`航空`→`空运`）；一文多种运输方式但已按**先出现**取定 | `value=""`；仅写快递等五档外用语；多种方式并存且先后顺序不明；枚举外被 `code` 清空 |
 | `urgency_level` | 原文直接出现「普通」或「加急」 | 同义归一（`紧急`/`急单`/`ASAP`→`加急`，`不急`/`正常时效`→`普通`）；加急与普通信号**冲突**后取 `加急`（值对、置信为中） | `value=""`（未提及任何时效信号）；信号极其模糊无法归到两档；枚举外被 `code` 清空 |
 | `origin_port_en` | 原文直接出现 UN/LOCODE、IATA、铁路电报码/UIC、英文站名/城市名/邮编等，与输出一致 | 从合写格式拆出 en 侧（优先代码或英文）；从路线表达推断起运侧且标识在原文 | `value=""`；由纯中文翻译补英文；跨码制补全；与 `dest_port_en` 混淆 |
 | `origin_port_zh` | 原文直接出现中文地名，去交通设施后缀后与输出一致 | 从合写格式拆出中文侧；从「从××出发」推断起运；仅去后缀 | `value=""`；由 en/代码翻译；与目的地混淆；后缀未去掉 |
@@ -205,7 +203,7 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 | --- | --- | --- |
 | 合写 `VNP/北京南` 或 `Beijing South/北京南` | en：高（代码/英文）；zh：高 | — |
 | 仅中文（如「汽运至上海」） | zh：高或中 | en：`置信低`（禁止译成 Shanghai） |
-| 铁路仅中文站名（如「成都南站」） | zh：高或中 | en：`置信低` |
+| 铁运仅中文站名（如「成都南站」） | zh：高或中 | en：`置信低` |
 | 仅 IATA/UN/LOCODE、无中文 | en 侧：高或中 | zh 侧：`置信低` |
 | 路线「A → B」两侧均正确拆分 | 各侧：高或中 | — |
 | 空运 + 港口码 / 海运 + IATA 等方式与码制不一致 | 值可保留原文标识；confidence **`置信中` 或 `置信低`**（instruction 取较低档） | — |
@@ -219,7 +217,7 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 | --- | --- | --- |
 | 1 | `value == ""` → `confidence = "置信低"` | 全部 11 字段 |
 | 2 | `confidence` 不在 `{置信高, 置信中, 置信低}` → `"置信低"` | 全部 |
-| 3 | `transport_mode` 不在七档白名单 → `value=""`，`confidence="置信低"` | `transport_mode` |
+| 3 | `transport_mode` 先按别名归一（`铁路`→`铁运`、`公路`/`陆运`→`汽运`、`海运 FCL`/`海运 LCL`→`海运`）；归一后仍不在五档白名单 → `value=""`，`confidence="置信低"`；别名改写且原标 `置信高` → 降为 `置信中` | `transport_mode` |
 | 4 | `trade_terms` 不在十二档白名单 → `value=""`，`confidence="置信低"` | `trade_terms` |
 | 5 | `urgency_level` 不在 `{普通, 加急}` → `value=""`，`confidence="置信低"` | `urgency_level` |
 | 6 | `origin_port_zh` / `dest_port_zh` 去掉交通设施后缀（`港`、`机场`、`国际机场`、`站`、`火车站`、`高铁站`）；去后为空 → `value=""`，`confidence="置信低"` | 中文地点字段 |
@@ -308,7 +306,7 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 
 - 输入是客户询价原文；只抽取、禁止臆造。
 - 同步为**每个字段**输出置信度，仅允许 `置信高`/`置信中`/`置信低`。
-- `transport_mode` / `trade_terms` / `urgency_level` 严格遵守封闭枚举；海运未标明 FCL/LCL 时 `transport_mode` 留空而非猜测。
+- `transport_mode` / `trade_terms` / `urgency_level` 严格遵守封闭枚举；「海运」不再要求 FCL/LCL；仅写快递等五档外用语时 `transport_mode` 留空。
 - 起运/目的地四字段：`_*_en` **英文/代码优先**（见上节）；铁路含电报码、UIC、英文站名；与运输方式联动但不跨码制补全。
 - 其余字段规则延续 v1（先出现、`service_scope` 用 ` / ` 等）。
 - 字符串未出现 → `value=""`，对应 `confidence` 建议 `置信低`。
@@ -320,7 +318,16 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 
 ```python
 ALLOWED_TRANSPORT = {
-    "海运 FCL", "海运 LCL", "空运", "铁路", "公路", "快递", "多式联运"
+    "空运", "海运", "铁运", "汽运", "多式联运"
+}
+TRANSPORT_ALIASES = {
+    "铁路": "铁运",
+    "公路": "汽运",
+    "陆运": "汽运",
+    "海运 FCL": "海运",
+    "海运 LCL": "海运",
+    "海运FCL": "海运",
+    "海运LCL": "海运",
 }
 ALLOWED_TRADE_TERMS = {
     "EXW", "FCA", "CPT", "CIP", "DAP", "DPU", "DDP", "FAS", "FOB", "CFR", "CIF"
@@ -344,10 +351,12 @@ FIELD_ORDER = [
 ```text
 1. value = strip；None / "null" / "none" → ""
 2. confidence = strip；不在 ALLOWED_CONFIDENCE → "置信低"
-3. 若 name 在 ENUM_FIELDS：
+3. 若 name == transport_mode 且 value 在 TRANSPORT_ALIASES：
+     映射到五档；若发生改写且 confidence 为「置信高」→「置信中」
+4. 若 name 在 ENUM_FIELDS：
      value 不在白名单 → value=""，confidence="置信低"
-4. 若 value == "" → confidence="置信低"（覆盖模型输出）
-5. 返回 {"value": value, "confidence": confidence}
+5. 若 value == "" → confidence="置信低"（覆盖模型输出）
+6. 返回 {"value": value, "confidence": confidence}
 ```
 
 - `json.dumps(..., ensure_ascii=False)` 按 `FIELD_ORDER` 固定 11 键顺序输出。
@@ -378,7 +387,7 @@ FIELD_ORDER = [
 - Create: `docs/adr/0004-field-confidence-single-pass.md`
 - Modify: `docs/adr/0003-empty-urgency-when-unspecified.md`（`紧急`→`加急` 表述）
 
-- [ ] **Step 1:** 更新 glossary：`物流类型`→`运输方式`及 7 档枚举；`报价条款`→`贸易条款`；紧急程度枚举；`抽取结果 JSON` 双层结构说明。
+- [ ] **Step 1:** 更新 glossary：`物流类型`→`运输方式`及 5 档枚举（`空运`/`海运`/`铁运`/`汽运`/`多式联运`）；`报价条款`→`贸易条款`；紧急程度枚举；`抽取结果 JSON` 双层结构说明。
 - [ ] **Step 2:** 新增 ADR-0004 记录「单 pass 参数提取器 + code 降级」决策及否决第二 LLM 的理由。
 - [ ] **Step 3:** 修订 ADR-0003 中 `紧急`/`普通` 为 `加急`/`普通`。
 
@@ -415,7 +424,7 @@ FIELD_ORDER = [
 - [ ] **Step 2:** 按失败诊断修 YAML直至 exit 0。
 - [ ] **Step 3:** 交付说明（导入、重连凭据、Breaking change 提示）。
 
-**试跑样例 A（海运 FCL + CIF + 普通）：**
+**试跑样例 A（海运 + CIF + 普通）：**
 
 ```text
 客户：宁波海天贸易有限公司
@@ -430,7 +439,7 @@ FIELD_ORDER = [
 ```json
 {
   "customer_name": { "value": "宁波海天贸易有限公司", "confidence": "置信高" },
-  "transport_mode": { "value": "海运 FCL", "confidence": "置信高" },
+  "transport_mode": { "value": "海运", "confidence": "置信高" },
   "urgency_level": { "value": "普通", "confidence": "置信中" },
   "origin_port_en": { "value": "CNNGB", "confidence": "置信高" },
   "origin_port_zh": { "value": "宁波", "confidence": "置信高" },
@@ -445,7 +454,7 @@ FIELD_ORDER = [
 
 （样例含「普通时效」故 `urgency_level` 为 `普通`/`置信中`；删去时效措辞则应为 `""`/`置信低`。）
 
-**试跑样例 B（公路 + 加急）：**
+**试跑样例 B（汽运 + 加急）：**
 
 ```text
 客户：苏州恒达机电有限公司
@@ -454,12 +463,12 @@ FIELD_ORDER = [
 
 **期望：**
 
-- `transport_mode.value` = `"公路"`（`汽运` 同义归一）
+- `transport_mode.value` = `"汽运"`（`公路` 同义归一）
 - `transport_mode.confidence` = `"置信中"`（同义归一）
 - `urgency_level.value` = `"加急"`
 - `dest_port_zh.value` = `"上海"`
 
-**试跑样例 C（海运未区分 FCL/LCL）：**
+**试跑样例 C（仅写海运）：**
 
 ```text
 客户：测试公司
@@ -468,8 +477,8 @@ FIELD_ORDER = [
 
 **期望：**
 
-- `transport_mode.value` = `""`（禁止猜 FCL/LCL）
-- `transport_mode.confidence` = `"置信低"`
+- `transport_mode.value` = `"海运"`
+- `transport_mode.confidence` = `"置信高"`
 
 **试跑样例 D（空运 + IATA）：**
 
@@ -488,7 +497,7 @@ FIELD_ORDER = [
 - `dest_port_en` = `{ "value": "LAX", "confidence": "置信高" }`
 - `dest_port_zh` = `{ "value": "洛杉矶", "confidence": "置信高" }`
 
-**试跑样例 E（铁路 + 仅中文站名）：**
+**试跑样例 E（铁运 + 仅中文站名）：**
 
 ```text
 客户：成都机械设备公司
@@ -497,12 +506,12 @@ FIELD_ORDER = [
 
 **期望：**
 
-- `transport_mode` = `{ "value": "铁路", "confidence": "置信高" }`
+- `transport_mode` = `{ "value": "铁运", "confidence": "置信中" }`（`铁路` 同义归一）
 - `origin_port_zh` = `{ "value": "成都南", "confidence": "置信高" }`
 - `dest_port_zh` = `{ "value": "西安北", "confidence": "置信高" }`
 - `origin_port_en` / `dest_port_en` = `""` / `置信低`（原文无拉丁标识，**禁止**译成 `Chengdu South`）
 
-**试跑样例 E2（铁路 + 电报码/英文，英文优先）：**
+**试跑样例 E2（铁运 + 电报码/英文，英文优先）：**
 
 ```text
 客户：中欧班列运营部
@@ -511,7 +520,7 @@ Rail freight. Origin VNP/北京南 to EAY/西安北. Cargo: auto parts.
 
 **期望：**
 
-- `transport_mode` = `{ "value": "铁路", "confidence": "置信高" }`
+- `transport_mode` = `{ "value": "铁运", "confidence": "置信中" }`（`rail` 同义归一）
 - `origin_port_en` = `{ "value": "VNP", "confidence": "置信高" }`（合写优先电报码；若原文为 `Beijing South/北京南` 则 en=`Beijing South`）
 - `origin_port_zh` = `{ "value": "北京南", "confidence": "置信高" }`
 - `dest_port_en` = `{ "value": "EAY", "confidence": "置信高" }`
@@ -547,7 +556,7 @@ Rail freight. Origin VNP/北京南 to EAY/西安北. Cargo: auto parts.
 
 | 需求 | 对应 |
 | --- | --- |
-| 运输方式 7 档封闭枚举 | `transport_mode` + instruction + `build_json` 白名单 |
+| 运输方式 5 档封闭枚举 | `transport_mode` + instruction + `build_json` 白名单 |
 | 贸易条款 12 档封闭枚举 | `trade_terms` + instruction + `build_json` 白名单 |
 | 紧急程度 `普通`/`加急` | `urgency_level` + ADR-0003 修订 |
 | 每字段置信度三档 | 11×`{value,confidence}` + **逐字段判定表** + instruction |
