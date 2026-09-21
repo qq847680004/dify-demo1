@@ -1,0 +1,1916 @@
+version: "0.7.0"
+kind: app
+app:
+  name: "AI 报价推荐引擎"
+  description: "根据询价单基础字段与可选补充信息召回有效运价、相似历史单与费用项，合成可解释的报价草案 JSON"
+  icon: "💹"
+  icon_type: emoji
+  icon_background: "#E4FBCC"
+  mode: workflow
+  use_icon_as_answer_icon: false
+dependencies:
+  - current_identifier: null
+    type: marketplace
+    value:
+      marketplace_plugin_unique_identifier: langgenius/tongyi:0.2.15@1df8bd27d67c149e6db3c210830ef6e3857c5a9df5e8edbe9e785b995f337ef5
+      version: null
+workflow:
+  conversation_variables: []
+  environment_variables:
+    - description: "本地测试：AI 数据网关前缀"
+      id: a1b2c3d4-0001-4000-8000-aidatabaseurl01
+      name: AIDATA_BASE_URL
+      selector: [env, AIDATA_BASE_URL]
+      value: "http://182.168.0.247:9999/aidata"
+      value_type: string
+    - description: "本地测试：Nacos aidata.agent.api-key，不是百炼 aidata.embedding.api-key"
+      id: a1b2c3d4-0002-4000-8000-aidataapikey001
+      name: AIDATA_API_KEY
+      selector: [env, AIDATA_API_KEY]
+      value: "aidata-agent-dev-20260920"
+      value_type: secret
+    - description: "本地测试：请求头 TENANT-ID"
+      id: a1b2c3d4-0003-4000-8000-aidatatenantid1
+      name: AIDATA_TENANT_ID
+      selector: [env, AIDATA_TENANT_ID]
+      value: "1"
+      value_type: string
+  features: {}
+  graph:
+    nodes:
+      - id: start
+        type: custom
+        data:
+          type: start
+          title: "询价基础字段"
+          variables:
+            - label: "询价号"
+              variable: inquiry_no
+              type: text-input
+              required: false
+              max_length: 32
+            - label: "客户名称"
+              variable: customer_name
+              type: text-input
+              required: true
+              max_length: 100
+            - label: "运输方式"
+              variable: logistics_type
+              type: text-input
+              required: true
+              max_length: 32
+            - label: "起运港码"
+              variable: origin_port_code
+              type: text-input
+              required: true
+              max_length: 32
+            - label: "目的港码"
+              variable: dest_port_code
+              type: text-input
+              required: true
+              max_length: 32
+            - label: "起运港名称"
+              variable: origin_port_name
+              type: text-input
+              required: true
+              max_length: 128
+            - label: "目的港名称"
+              variable: dest_port_name
+              type: text-input
+              required: true
+              max_length: 128
+            - label: "品名"
+              variable: cargo_name
+              type: text-input
+              required: false
+              max_length: 200
+            - label: "货品规格"
+              variable: cargo_spec
+              type: text-input
+              required: false
+              max_length: 200
+            - label: "报价条款"
+              variable: quote_terms
+              type: text-input
+              required: false
+              max_length: 32
+            - label: "服务范围"
+              variable: service_scope
+              type: text-input
+              required: false
+              max_length: 200
+            - label: "紧急程度"
+              variable: urgency_level
+              type: text-input
+              required: false
+              max_length: 32
+            - label: "补充信息"
+              variable: supplement
+              type: paragraph
+              required: false
+              max_length: 1000
+        position: {x: 40, y: 280}
+        positionAbsolute: {x: 40, y: 280}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 140
+      - id: join_inquiry
+        type: custom
+        data:
+          type: template-transform
+          title: "拼接询价基础字段"
+          variables:
+            - variable: logistics_type
+              value_selector: [start, logistics_type]
+            - variable: origin_port_code
+              value_selector: [start, origin_port_code]
+            - variable: dest_port_code
+              value_selector: [start, dest_port_code]
+            - variable: origin_port_name
+              value_selector: [start, origin_port_name]
+            - variable: dest_port_name
+              value_selector: [start, dest_port_name]
+            - variable: cargo_name
+              value_selector: [start, cargo_name]
+            - variable: cargo_spec
+              value_selector: [start, cargo_spec]
+            - variable: quote_terms
+              value_selector: [start, quote_terms]
+            - variable: service_scope
+              value_selector: [start, service_scope]
+            - variable: supplement
+              value_selector: [start, supplement]
+          template: |
+            运输方式: {{ logistics_type }}
+            起运港码: {{ origin_port_code }}
+            目的港码: {{ dest_port_code }}
+            起运港名称: {{ origin_port_name }}
+            目的港名称: {{ dest_port_name }}
+            品名: {{ cargo_name }}
+            规格: {{ cargo_spec }}
+            条款: {{ quote_terms }}
+            服务范围: {{ service_scope }}
+            补充信息: {{ supplement }}
+        position: {x: 340, y: 80}
+        positionAbsolute: {x: 340, y: 80}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 80
+      - id: infer_route
+        type: custom
+        data:
+          type: parameter-extractor
+          title: "判定进出口与运价类型"
+          instruction: |
+            从询价基础字段与补充信息判定进出口、运价类型、不规范规格归一。禁止改写运输方式，禁止手写货运类型码，禁止解析船司航线码头。
+            io_direction：1=出口，2=进口；推不出则 1。条款/服务范围不得推翻港码（港码由下游规则覆盖）。
+            rate_type 只能是：FBA, DUAL, PORT, FCL_FEEDER, SPECIAL_EXPORT, REEFER_EXPORT, FCL_EXPORT, FCL_IMPORT, LCL_EXPORT, LCL_IMPORT, AIR_EXPORT, RAIL。禁止传 SEA。
+            空运进口 / 汽运 / 多式联运无主表 → skip_rate=true 且 rate_type 空。空运出口 → AIR_EXPORT。铁运 → RAIL。
+            海运：整箱/FCL→FCL_*；拼箱/LCL/CBM/TON→LCL_*；都没有则默认 FCL_*（按进出口），skip_rate=false。柜型读不出可填 40HQ（默认猜）。箱量读不出填 1。
+            服务范围 FBA/双清/集港/驳船优先。特种 OT/FR+出口→SPECIAL_EXPORT；冷冻 RF+出口→REEFER_EXPORT。
+            skip_rate 仅当没有对应主表。
+          model:
+            provider: langgenius/tongyi/tongyi
+            name: qwen3.7-flash-2026-07-15
+            mode: chat
+            completion_params:
+              temperature: 0.1
+              enable_thinking: false
+          parameters:
+            - name: io_direction
+              type: number
+              description: "1 出口 2 进口；港码能推出时仍可给参考值"
+              required: false
+            - name: rate_type
+              type: string
+              description: "运价类型枚举，选不出则空"
+              required: false
+            - name: container_type
+              type: string
+              description: "归一规格代码如 40HQ，读不出则空"
+              required: false
+            - name: quantity
+              type: number
+              description: "箱量，读不出为 0"
+              required: false
+            - name: skip_rate
+              type: boolean
+              description: "无法选运价表时 true"
+              required: false
+          query: [join_inquiry, output]
+          reasoning_mode: prompt
+          vision:
+            enabled: false
+        position: {x: 640, y: 80}
+        positionAbsolute: {x: 640, y: 80}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
+      - id: need_supp
+        type: custom
+        data:
+          type: if-else
+          title: "补充信息是否非空"
+          cases:
+            - id: has_supp
+              case_id: has_supp
+              logical_operator: and
+              conditions:
+                - id: supp-not-empty
+                  variable_selector: [start, supplement]
+                  comparison_operator: not empty
+                  value: ""
+                  varType: string
+        position: {x: 340, y: 420}
+        positionAbsolute: {x: 340, y: 420}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 126
+      - id: parse_supplement
+        type: custom
+        data:
+          type: parameter-extractor
+          title: "解析补充信息"
+          instruction: |
+            只读补充信息，抽出写明的线索。没写明的键必须空字符串，禁止猜测 MSC/直达/美国。禁止把「尽量快」写成直达，禁止把品名写成船司，禁止用船期冒充 transit_type。
+            carrier：船司/航司原文。route_name：航线名如美西。route_code：航线代码。country：目的国原文，不擅自改 ISO。
+            transit_type：仅用户明确时填 直达 或 中转。origin_terminal/dest_terminal：码头。schedule_note：船期/班期原文。spec_hint：补充信息里的规格线索。
+            运输方式与规格仅作消歧，不得改写港码。
+          model:
+            provider: langgenius/tongyi/tongyi
+            name: qwen3.7-flash-2026-07-15
+            mode: chat
+            completion_params:
+              temperature: 0.1
+              enable_thinking: false
+          parameters:
+            - name: carrier
+              type: string
+              description: "船司/航司原文，未写明则空"
+              required: false
+            - name: route_name
+              type: string
+              description: "航线名，未写明则空"
+              required: false
+            - name: route_code
+              type: string
+              description: "航线代码，未写明则空"
+              required: false
+            - name: country
+              type: string
+              description: "国家原文，未写明则空"
+              required: false
+            - name: transit_type
+              type: string
+              description: "仅直达或中转，未写明则空"
+              required: false
+            - name: origin_terminal
+              type: string
+              description: "起运码头，未写明则空"
+              required: false
+            - name: dest_terminal
+              type: string
+              description: "目的码头，未写明则空"
+              required: false
+            - name: schedule_note
+              type: string
+              description: "船期原文，未写明则空"
+              required: false
+            - name: spec_hint
+              type: string
+              description: "补充信息中的规格线索，未写明则空"
+              required: false
+          query: [start, supplement]
+          reasoning_mode: prompt
+          vision:
+            enabled: false
+        position: {x: 640, y: 320}
+        positionAbsolute: {x: 640, y: 320}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
+      - id: pack_supp
+        type: custom
+        data:
+          type: code
+          title: "打包补充信息"
+          code_language: python3
+          code: |
+            import json
+
+            def s(v):
+                return "" if v is None else str(v).strip()
+
+            def main(
+                carrier: str = "",
+                route_name: str = "",
+                route_code: str = "",
+                country: str = "",
+                transit_type: str = "",
+                origin_terminal: str = "",
+                dest_terminal: str = "",
+                schedule_note: str = "",
+                spec_hint: str = "",
+            ) -> dict:
+                payload = {
+                    "carrier": s(carrier),
+                    "route_name": s(route_name),
+                    "route_code": s(route_code),
+                    "country": s(country),
+                    "transit_type": s(transit_type) if s(transit_type) in ("直达", "中转") else "",
+                    "origin_terminal": s(origin_terminal),
+                    "dest_terminal": s(dest_terminal),
+                    "schedule_note": s(schedule_note),
+                    "spec_hint": s(spec_hint),
+                }
+                return {"supp_json": json.dumps(payload, ensure_ascii=False)}
+          variables:
+            - variable: carrier
+              value_selector: [parse_supplement, carrier]
+            - variable: route_name
+              value_selector: [parse_supplement, route_name]
+            - variable: route_code
+              value_selector: [parse_supplement, route_code]
+            - variable: country
+              value_selector: [parse_supplement, country]
+            - variable: transit_type
+              value_selector: [parse_supplement, transit_type]
+            - variable: origin_terminal
+              value_selector: [parse_supplement, origin_terminal]
+            - variable: dest_terminal
+              value_selector: [parse_supplement, dest_terminal]
+            - variable: schedule_note
+              value_selector: [parse_supplement, schedule_note]
+            - variable: spec_hint
+              value_selector: [parse_supplement, spec_hint]
+          outputs:
+            supp_json:
+              type: string
+              children: null
+        position: {x: 940, y: 320}
+        positionAbsolute: {x: 940, y: 320}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 100
+      - id: empty_supp
+        type: custom
+        data:
+          type: code
+          title: "空补充信息"
+          code_language: python3
+          code: |
+            import json
+
+            def main(inquiry_no: str = "") -> dict:
+                payload = {
+                    "carrier": "", "route_name": "", "route_code": "", "country": "",
+                    "transit_type": "", "origin_terminal": "", "dest_terminal": "",
+                    "schedule_note": "", "spec_hint": "",
+                }
+                return {"supp_json": json.dumps(payload, ensure_ascii=False)}
+          variables:
+            - variable: inquiry_no
+              value_selector: [start, inquiry_no]
+          outputs:
+            supp_json:
+              type: string
+              children: null
+        position: {x: 640, y: 560}
+        positionAbsolute: {x: 640, y: 560}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 80
+      - id: agg_supp
+        type: custom
+        data:
+          type: variable-aggregator
+          title: "合并补充信息"
+          output_type: string
+          variables:
+            - [pack_supp, supp_json]
+            - [empty_supp, supp_json]
+          advanced_settings:
+            group_enabled: false
+            groups: []
+        position: {x: 1240, y: 420}
+        positionAbsolute: {x: 1240, y: 420}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 80
+      - id: assemble
+        type: custom
+        data:
+          type: code
+          title: "组装检索 Body"
+          code_language: python3
+          code: |
+            import json
+            import re
+
+            RATE_ENUM = {
+                "FBA", "DUAL", "PORT", "FCL_FEEDER", "SPECIAL_EXPORT", "REEFER_EXPORT",
+                "FCL_EXPORT", "FCL_IMPORT", "LCL_EXPORT", "LCL_IMPORT", "AIR_EXPORT", "RAIL",
+            }
+            RATE_PORT_NAME_ONLY = {
+                "AIR_EXPORT", "SPECIAL_EXPORT", "REEFER_EXPORT",
+                "FCL_IMPORT", "LCL_IMPORT", "RAIL", "FBA", "DUAL", "PORT", "FCL_FEEDER",
+            }
+            RATE_LABEL = {
+                "FBA": "FBA", "DUAL": "双清", "PORT": "集港", "FCL_FEEDER": "驳船",
+                "SPECIAL_EXPORT": "出口特种", "REEFER_EXPORT": "出口冷冻",
+                "FCL_EXPORT": "出口整箱", "FCL_IMPORT": "进口整箱",
+                "LCL_EXPORT": "出口拼箱", "LCL_IMPORT": "进口拼箱",
+                "AIR_EXPORT": "出口空运", "RAIL": "铁路",
+            }
+            BOX = "20GP|40GP|40HQ|45HQ|40NOR|20OT|40OT|20FR|40FR|20RF|40RF|40RH|45GP|20HQ"
+            BOX_RE = re.compile(r"(\d+)\s*[x×]\s*(" + BOX + r")", re.I)
+            BARE_BOX_RE = re.compile(r"(" + BOX + r")", re.I)
+            CBM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(CBM|cbm|方)")
+            TON_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(TON|ton|吨)")
+            MONEY_RE = re.compile(r"(USD|CNY|EUR|HKD|人民币|美金|美元|欧元)?\s*[¥$€]?\s*\d[\d,]*(\.\d+)?")
+
+
+            def s(v):
+                return "" if v is None else str(v).strip()
+
+
+            def n(v, default=0):
+                try:
+                    if v is None or v == "":
+                        return default
+                    return int(float(v))
+                except Exception:
+                    return default
+
+
+            def port_cc(code):
+                c = s(code).upper()
+                return c[:2] if len(c) >= 2 else ""
+
+
+            def norm_logistics(raw):
+                t = s(raw).upper()
+                zh = s(raw)
+                if t in ("AIR",) or "空运" in zh:
+                    return "AIR"
+                if t in ("SEA", "SEA_FCL", "SEA_LCL") or "海运" in zh:
+                    return "SEA"
+                if t in ("RAIL",) or "铁运" in zh or "铁路" in zh:
+                    return "RAIL"
+                if t in ("ROAD", "EXPRESS") or "汽运" in zh:
+                    return "ROAD"
+                if t in ("MULTIMODAL",) or "多式联运" in zh:
+                    return "MULTIMODAL"
+                return ""
+
+
+            def parse_spec(text):
+                types = []
+                qty = 0
+                for m in BOX_RE.finditer(text or ""):
+                    q = int(m.group(1))
+                    ct = m.group(2).upper()
+                    qty += q
+                    if ct not in types:
+                        types.append(ct)
+                if not types:
+                    for m in BARE_BOX_RE.finditer(text or ""):
+                        ct = m.group(1).upper()
+                        if ct not in types:
+                            types.append(ct)
+                    if types:
+                        qty = 1
+                cbm = CBM_RE.search(text or "")
+                ton = TON_RE.search(text or "")
+                return types, qty, bool(cbm), bool(ton)
+
+
+            def alias_spec(text):
+                t = s(text)
+                types = []
+                if "高柜" in t or "HQ" in t.upper():
+                    types.append("40HQ")
+                if "平柜" in t or re.search(r"40\s*GP", t, re.I):
+                    types.append("40GP")
+                if "开顶" in t or re.search(r"\bOT\b", t, re.I):
+                    types.append("20OT")
+                if "框架" in t or re.search(r"\bFR\b", t, re.I):
+                    types.append("20FR")
+                if "冷冻" in t or "reefer" in t.lower() or re.search(r"\bRF\b", t, re.I):
+                    types.append("20RF")
+                qty = 0
+                m = re.search(r"(\d+)\s*(个|只|台|柜)?", t)
+                if m:
+                    qty = int(m.group(1))
+                return types, qty
+
+
+            def pick_rate(logistics, io_dir, spec_text, service, container_types, has_vol, infer_rate):
+                svc = s(service)
+                up = svc.upper()
+                if "FBA" in up:
+                    return "FBA"
+                if "双清" in svc:
+                    return "DUAL"
+                if "集港" in svc:
+                    return "PORT"
+                if "驳船" in svc:
+                    return "FCL_FEEDER"
+                raw = s(spec_text)
+                blob = (raw + " " + " ".join(container_types)).upper()
+                special = any(x in blob for x in ("OT", "FR")) or ("开顶" in raw) or ("框架" in raw)
+                reefer = any(x in blob for x in ("RF", "REEFER")) or ("冷冻" in raw)
+                fcl = bool(container_types) or "FCL" in blob or "整箱" in raw
+                lcl = has_vol or "LCL" in blob or "拼箱" in raw or "CBM" in blob or "TON" in blob
+                if logistics == "AIR":
+                    return "AIR_EXPORT" if io_dir == 1 else ""
+                if logistics == "RAIL":
+                    return "RAIL"
+                if logistics in ("ROAD", "MULTIMODAL"):
+                    return ""
+                if logistics == "SEA":
+                    if special and io_dir == 1:
+                        return "SPECIAL_EXPORT"
+                    if reefer and io_dir == 1:
+                        return "REEFER_EXPORT"
+                    if fcl and io_dir == 1:
+                        return "FCL_EXPORT"
+                    if fcl and io_dir == 2:
+                        return "FCL_IMPORT"
+                    if lcl and io_dir == 1:
+                        return "LCL_EXPORT"
+                    if lcl and io_dir == 2:
+                        return "LCL_IMPORT"
+                    return "FCL_EXPORT" if io_dir == 1 else "FCL_IMPORT"
+                ir = s(infer_rate).upper()
+                return ir if ir in RATE_ENUM else ""
+
+
+            def biz_of(logistics, io_dir):
+                if logistics == "AIR":
+                    return "AIR_EXPORT" if io_dir == 1 else "AIR_IMPORT"
+                if logistics == "SEA":
+                    return "SEA_EXPORT" if io_dir == 1 else "SEA_IMPORT"
+                if logistics == "ROAD":
+                    return "TRUCK_EXPORT" if io_dir == 1 else "TRUCK_IMPORT"
+                if logistics == "RAIL":
+                    return "RAIL_EXPORT" if io_dir == 1 else "RAIL_IMPORT"
+                if logistics == "MULTIMODAL":
+                    return "INTERMODAL"
+                return ""
+
+
+            def put(d, k, v):
+                if v is None:
+                    return
+                if isinstance(v, str) and not v.strip():
+                    return
+                if isinstance(v, list) and not v:
+                    return
+                d[k] = v
+
+
+            def put_ports(d, origin_code, origin_name, dest_code, dest_name, use_name_only):
+                if origin_code and not use_name_only:
+                    d["originPortCode"] = origin_code
+                elif origin_name:
+                    d["originPortName"] = origin_name
+                if dest_code and not use_name_only:
+                    d["destPortCode"] = dest_code
+                elif dest_name:
+                    d["destPortName"] = dest_name
+
+
+            def main(
+                inquiry_no: str = "",
+                customer_name: str = "",
+                logistics_type: str = "",
+                origin_port_code: str = "",
+                dest_port_code: str = "",
+                origin_port_name: str = "",
+                dest_port_name: str = "",
+                cargo_name: str = "",
+                cargo_spec: str = "",
+                quote_terms: str = "",
+                service_scope: str = "",
+                supplement: str = "",
+                infer_io: float = 0,
+                infer_rate: str = "",
+                infer_container: str = "",
+                infer_qty: float = 0,
+                supp_json: str = "",
+            ) -> dict:
+                opc = s(origin_port_code).upper()
+                dpc = s(dest_port_code).upper()
+                op = s(origin_port_name)
+                dp = s(dest_port_name)
+                spec = s(cargo_spec)
+                svc = s(service_scope)
+                logi = norm_logistics(logistics_type)
+                try:
+                    supp = json.loads(supp_json or "{}")
+                except Exception:
+                    supp = {}
+                if not isinstance(supp, dict):
+                    supp = {}
+                carrier = s(supp.get("carrier"))
+                route_name = s(supp.get("route_name"))
+                route_code = s(supp.get("route_code"))
+                country = s(supp.get("country"))
+                transit = s(supp.get("transit_type"))
+                if transit not in ("直达", "中转"):
+                    transit = ""
+                origin_terminal = s(supp.get("origin_terminal"))
+                dest_terminal = s(supp.get("dest_terminal"))
+                schedule_note = s(supp.get("schedule_note"))
+                spec_hint = s(supp.get("spec_hint"))
+                blob_text = " ".join([spec, spec_hint, svc, s(supplement)])
+                types, qty, has_cbm, has_ton = parse_spec(blob_text)
+                if not types:
+                    a_types, a_qty = alias_spec(blob_text)
+                    for t in a_types:
+                        if t not in types:
+                            types.append(t)
+                    if not qty:
+                        qty = a_qty
+                ic = s(infer_container).upper()
+                if ic and ic not in types and re.fullmatch(BOX, ic, re.I):
+                    types.append(ic.upper())
+                if not qty:
+                    qty = n(infer_qty, 0)
+                if types and not qty:
+                    qty = 1
+                oc = port_cc(opc)
+                dc = port_cc(dpc)
+                io = 0
+                if oc == "CN" and dc and dc != "CN":
+                    io = 1
+                elif dc == "CN" and oc and oc != "CN":
+                    io = 2
+                elif not oc and dc and dc != "CN":
+                    io = 1
+                elif not oc and dc == "CN":
+                    io = 2
+                elif oc == "CN" and dc == "CN":
+                    io = n(infer_io, 0)
+                elif oc and dc and oc != "CN" and dc != "CN":
+                    io = n(infer_io, 0)
+                else:
+                    io = n(infer_io, 0)
+                if io not in (1, 2):
+                    io = 1
+                rate = s(infer_rate).upper()
+                if rate not in RATE_ENUM:
+                    rate = ""
+                computed = pick_rate(logi, io, blob_text, svc, types, has_cbm or has_ton, infer_rate)
+                if logi == "AIR" and io == 2:
+                    rate = ""
+                elif logi in ("ROAD", "MULTIMODAL"):
+                    rate = ""
+                elif computed:
+                    rate = computed
+                elif rate == "AIR_EXPORT" and io == 2:
+                    rate = ""
+                if logi == "SEA" and rate not in RATE_ENUM:
+                    rate = "FCL_EXPORT" if io == 1 else "FCL_IMPORT"
+                skip = 0 if rate in RATE_ENUM else 1
+                if logi == "AIR" and io == 2:
+                    skip = 1
+                    rate = ""
+                elif logi in ("ROAD", "MULTIMODAL", ""):
+                    skip = 1
+                    rate = ""
+                spec_guessed = 0
+                fcl_like = rate in (
+                    "FBA", "DUAL", "PORT", "FCL_FEEDER",
+                    "SPECIAL_EXPORT", "REEFER_EXPORT", "FCL_EXPORT", "FCL_IMPORT",
+                )
+                if skip == 0 and fcl_like and not types:
+                    types = ["40HQ"]
+                    spec_guessed = 1
+                    if not qty:
+                        qty = 1
+                if skip == 0 and logi == "RAIL" and not types:
+                    types = ["40HQ"]
+                    spec_guessed = 1
+                    if not qty:
+                        qty = 1
+                if skip == 0 and rate in ("LCL_EXPORT", "LCL_IMPORT") and not has_cbm and not has_ton:
+                    spec_guessed = 1
+                info_ins = spec_guessed
+                preferred = types[0] if types else (
+                    "CBM" if has_cbm or rate in ("LCL_EXPORT", "LCL_IMPORT") else ("TON" if has_ton else "")
+                )
+                rest = MONEY_RE.sub(" ", s(supplement))
+                for token in (carrier, route_name, route_code, country, transit, schedule_note, spec_hint):
+                    if token:
+                        rest = rest.replace(token, " ")
+                rest = re.sub(r"\s+", " ", rest).strip()
+                io_zh = "出口" if io == 1 else "进口"
+                rate_zh = RATE_LABEL.get(rate, logi)
+                parts = [io_zh + (rate_zh or ""), op, opc, dp, dpc, s(cargo_name), spec or preferred, carrier, route_name, route_code, country, transit, schedule_note, rest]
+                query = re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
+                rate_body = {}
+                if skip == 0:
+                    rate_body["queryText"] = query
+                    rate_body["rateType"] = rate
+                    put_ports(rate_body, opc, op, dpc, dp, rate in RATE_PORT_NAME_ONLY)
+                    put(rate_body, "originTerminal", origin_terminal)
+                    put(rate_body, "destTerminal", dest_terminal)
+                    put(rate_body, "carrier", carrier)
+                    put(rate_body, "routeName", route_name)
+                    put(rate_body, "routeCode", route_code)
+                    put(rate_body, "country", country)
+                    put(rate_body, "transitType", transit)
+                    if types:
+                        rate_body["containerTypes"] = types
+                order_body = {"queryText": query, "ioDirection": io, "top": 8}
+                put(order_body, "logisticsType", logi)
+                put_ports(order_body, opc, op, dpc, dp, False)
+                bt = biz_of(logi, io)
+                put(order_body, "bizType", bt)
+                if types:
+                    order_body["containerType"] = types[0]
+                charge_body = {}
+                skip_charge = 1
+                if logi:
+                    charge_body = {"logisticsType": logi, "ioDirection": io}
+                    skip_charge = 0
+                analyzed = {
+                    "ioDirection": io,
+                    "ioDirectionLabel": io_zh,
+                    "logisticsType": logi,
+                    "rateType": rate,
+                    "rateTypeLabel": RATE_LABEL.get(rate, ""),
+                    "queryText": query,
+                    "containerTypes": types,
+                    "selectedSpec": preferred,
+                    "quantity": qty,
+                    "skipRate": bool(skip),
+                    "specGuessed": bool(spec_guessed),
+                    "carrier": carrier,
+                    "routeName": route_name,
+                    "country": country,
+                    "transitType": transit,
+                }
+                return {
+                    "io_direction": io,
+                    "logistics_type": logi,
+                    "rate_type": rate,
+                    "biz_type": bt or "",
+                    "query_text": query,
+                    "container_types_json": json.dumps(types, ensure_ascii=False),
+                    "quantity": qty,
+                    "skip_rate": skip,
+                    "skip_charge": skip_charge,
+                    "info_insufficient": info_ins,
+                    "spec_guessed": spec_guessed,
+                    "rate_body": json.dumps(rate_body, ensure_ascii=False),
+                    "order_body": json.dumps(order_body, ensure_ascii=False),
+                    "charge_body": json.dumps(charge_body, ensure_ascii=False),
+                    "analyzed_json": json.dumps(analyzed, ensure_ascii=False),
+                }
+          variables:
+            - variable: inquiry_no
+              value_selector: [start, inquiry_no]
+            - variable: customer_name
+              value_selector: [start, customer_name]
+            - variable: logistics_type
+              value_selector: [start, logistics_type]
+            - variable: origin_port_code
+              value_selector: [start, origin_port_code]
+            - variable: dest_port_code
+              value_selector: [start, dest_port_code]
+            - variable: origin_port_name
+              value_selector: [start, origin_port_name]
+            - variable: dest_port_name
+              value_selector: [start, dest_port_name]
+            - variable: cargo_name
+              value_selector: [start, cargo_name]
+            - variable: cargo_spec
+              value_selector: [start, cargo_spec]
+            - variable: quote_terms
+              value_selector: [start, quote_terms]
+            - variable: service_scope
+              value_selector: [start, service_scope]
+            - variable: supplement
+              value_selector: [start, supplement]
+            - variable: infer_io
+              value_selector: [infer_route, io_direction]
+            - variable: infer_rate
+              value_selector: [infer_route, rate_type]
+            - variable: infer_container
+              value_selector: [infer_route, container_type]
+            - variable: infer_qty
+              value_selector: [infer_route, quantity]
+            - variable: supp_json
+              value_selector: [agg_supp, output]
+          outputs:
+            io_direction:
+              type: number
+            logistics_type:
+              type: string
+              children: null
+            rate_type:
+              type: string
+              children: null
+            biz_type:
+              type: string
+              children: null
+            query_text:
+              type: string
+              children: null
+            container_types_json:
+              type: string
+              children: null
+            quantity:
+              type: number
+            skip_rate:
+              type: number
+            skip_charge:
+              type: number
+            info_insufficient:
+              type: number
+            spec_guessed:
+              type: number
+            rate_body:
+              type: string
+              children: null
+            order_body:
+              type: string
+              children: null
+            charge_body:
+              type: string
+              children: null
+            analyzed_json:
+              type: string
+              children: null
+        position: {x: 1540, y: 240}
+        positionAbsolute: {x: 1540, y: 240}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 140
+      - id: need_rate
+        type: custom
+        data:
+          type: if-else
+          title: "是否检索运价"
+          cases:
+            - id: do_rate
+              case_id: do_rate
+              logical_operator: and
+              conditions:
+                - id: skip-rate-false
+                  variable_selector: [assemble, skip_rate]
+                  comparison_operator: "="
+                  value: "0"
+                  varType: number
+        position: {x: 1840, y: 40}
+        positionAbsolute: {x: 1840, y: 40}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 126
+      - id: need_charge
+        type: custom
+        data:
+          type: if-else
+          title: "是否拉费用项"
+          cases:
+            - id: do_charge
+              case_id: do_charge
+              logical_operator: and
+              conditions:
+                - id: skip-charge-false
+                  variable_selector: [assemble, skip_charge]
+                  comparison_operator: "="
+                  value: "0"
+                  varType: number
+        position: {x: 1840, y: 360}
+        positionAbsolute: {x: 1840, y: 360}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 126
+      - id: search_rates
+        type: custom
+        data:
+          type: http-request
+          title: "检索有效运价"
+          method: post
+          url: "{{#env.AIDATA_BASE_URL#}}/agent/rate/search"
+          params: ""
+          body:
+            type: json
+            data: "{{#assemble.rate_body#}}"
+          authorization:
+            type: api-key
+            config:
+              type: bearer
+              api_key: "{{#env.AIDATA_API_KEY#}}"
+          headers: "Content-Type: application/json\nTENANT-ID: {{#env.AIDATA_TENANT_ID#}}"
+          timeout:
+            max_connect_timeout: 10
+            max_read_timeout: 60
+            max_write_timeout: 30
+          retry_config:
+            retry_enabled: true
+            max_retries: 3
+            retry_interval: 1000
+          error_strategy: fail-branch
+          ssl_verify: true
+        position: {x: 2140, y: 0}
+        positionAbsolute: {x: 2140, y: 0}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
+      - id: empty_rates
+        type: custom
+        data:
+          type: code
+          title: "空运价"
+          code_language: python3
+          code: |
+            def main(inquiry_no: str = "") -> dict:
+                return {"body": "{\"data\":{\"hits\":[]}}"}
+          variables:
+            - variable: inquiry_no
+              value_selector: [start, inquiry_no]
+          outputs:
+            body:
+              type: string
+              children: null
+        position: {x: 2140, y: 160}
+        positionAbsolute: {x: 2140, y: 160}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 70
+      - id: search_orders
+        type: custom
+        data:
+          type: http-request
+          title: "检索相似历史单"
+          method: post
+          url: "{{#env.AIDATA_BASE_URL#}}/agent/order/search"
+          params: ""
+          body:
+            type: json
+            data: "{{#assemble.order_body#}}"
+          authorization:
+            type: api-key
+            config:
+              type: bearer
+              api_key: "{{#env.AIDATA_API_KEY#}}"
+          headers: "Content-Type: application/json\nTENANT-ID: {{#env.AIDATA_TENANT_ID#}}"
+          timeout:
+            max_connect_timeout: 10
+            max_read_timeout: 60
+            max_write_timeout: 30
+          retry_config:
+            retry_enabled: true
+            max_retries: 3
+            retry_interval: 1000
+          error_strategy: fail-branch
+          ssl_verify: true
+        position: {x: 2140, y: 260}
+        positionAbsolute: {x: 2140, y: 260}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
+      - id: empty_orders
+        type: custom
+        data:
+          type: code
+          title: "空历史单"
+          code_language: python3
+          code: |
+            def main(inquiry_no: str = "") -> dict:
+                return {"body": "{\"data\":{\"hits\":[]}}"}
+          variables:
+            - variable: inquiry_no
+              value_selector: [start, inquiry_no]
+          outputs:
+            body:
+              type: string
+              children: null
+        position: {x: 2440, y: 320}
+        positionAbsolute: {x: 2440, y: 320}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 70
+      - id: list_charges
+        type: custom
+        data:
+          type: http-request
+          title: "列出费用项"
+          method: post
+          url: "{{#env.AIDATA_BASE_URL#}}/agent/settlement/charge-items"
+          params: ""
+          body:
+            type: json
+            data: "{{#assemble.charge_body#}}"
+          authorization:
+            type: api-key
+            config:
+              type: bearer
+              api_key: "{{#env.AIDATA_API_KEY#}}"
+          headers: "Content-Type: application/json\nTENANT-ID: {{#env.AIDATA_TENANT_ID#}}"
+          timeout:
+            max_connect_timeout: 10
+            max_read_timeout: 60
+            max_write_timeout: 30
+          retry_config:
+            retry_enabled: true
+            max_retries: 3
+            retry_interval: 1000
+          error_strategy: fail-branch
+          ssl_verify: true
+        position: {x: 2140, y: 420}
+        positionAbsolute: {x: 2140, y: 420}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
+      - id: empty_charges
+        type: custom
+        data:
+          type: code
+          title: "空费用项"
+          code_language: python3
+          code: |
+            def main(inquiry_no: str = "") -> dict:
+                return {"body": "{\"data\":{\"items\":[]}}"}
+          variables:
+            - variable: inquiry_no
+              value_selector: [start, inquiry_no]
+          outputs:
+            body:
+              type: string
+              children: null
+        position: {x: 2140, y: 560}
+        positionAbsolute: {x: 2140, y: 560}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 70
+      - id: fetch_fx
+        type: custom
+        data:
+          type: http-request
+          title: "拉取公开汇率"
+          method: get
+          url: "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
+          params: ""
+          body:
+            type: none
+            data: []
+          authorization:
+            type: no-auth
+            config: null
+          headers: ""
+          timeout:
+            max_connect_timeout: 10
+            max_read_timeout: 60
+            max_write_timeout: 30
+          retry_config:
+            retry_enabled: true
+            max_retries: 3
+            retry_interval: 1000
+          error_strategy: fail-branch
+          ssl_verify: true
+        position: {x: 2140, y: 660}
+        positionAbsolute: {x: 2140, y: 660}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
+      - id: fx_fallback
+        type: custom
+        data:
+          type: http-request
+          title: "备源汇率"
+          method: get
+          url: "https://latest.currency-api.pages.dev/v1/currencies/usd.json"
+          params: ""
+          body:
+            type: none
+            data: []
+          authorization:
+            type: no-auth
+            config: null
+          headers: ""
+          timeout:
+            max_connect_timeout: 10
+            max_read_timeout: 60
+            max_write_timeout: 30
+          retry_config:
+            retry_enabled: true
+            max_retries: 3
+            retry_interval: 1000
+          error_strategy: fail-branch
+          ssl_verify: true
+        position: {x: 2440, y: 740}
+        positionAbsolute: {x: 2440, y: 740}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
+      - id: empty_fx
+        type: custom
+        data:
+          type: code
+          title: "空汇率"
+          code_language: python3
+          code: |
+            def main(inquiry_no: str = "") -> dict:
+                return {"body": "{}"}
+          variables:
+            - variable: inquiry_no
+              value_selector: [start, inquiry_no]
+          outputs:
+            body:
+              type: string
+              children: null
+        position: {x: 2740, y: 820}
+        positionAbsolute: {x: 2740, y: 820}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 70
+      - id: agg_rates
+        type: custom
+        data:
+          type: variable-aggregator
+          title: "合并运价响应"
+          output_type: string
+          variables:
+            - [search_rates, body]
+            - [empty_rates, body]
+          advanced_settings:
+            group_enabled: false
+            groups: []
+        position: {x: 2740, y: 80}
+        positionAbsolute: {x: 2740, y: 80}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 80
+      - id: agg_orders
+        type: custom
+        data:
+          type: variable-aggregator
+          title: "合并历史单响应"
+          output_type: string
+          variables:
+            - [search_orders, body]
+            - [empty_orders, body]
+          advanced_settings:
+            group_enabled: false
+            groups: []
+        position: {x: 2740, y: 280}
+        positionAbsolute: {x: 2740, y: 280}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 80
+      - id: agg_charges
+        type: custom
+        data:
+          type: variable-aggregator
+          title: "合并费用项响应"
+          output_type: string
+          variables:
+            - [list_charges, body]
+            - [empty_charges, body]
+          advanced_settings:
+            group_enabled: false
+            groups: []
+        position: {x: 2740, y: 480}
+        positionAbsolute: {x: 2740, y: 480}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 80
+      - id: agg_fx
+        type: custom
+        data:
+          type: variable-aggregator
+          title: "合并汇率"
+          output_type: string
+          variables:
+            - [fetch_fx, body]
+            - [fx_fallback, body]
+            - [empty_fx, body]
+          advanced_settings:
+            group_enabled: false
+            groups: []
+        position: {x: 3040, y: 700}
+        positionAbsolute: {x: 3040, y: 700}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 80
+      - id: pack_context
+        type: custom
+        data:
+          type: code
+          title: "打包召回上下文"
+          code_language: python3
+          code: |
+            import json
+            import re
+
+            DROP = re.compile(r"(cost|buyprice|buy_price|costcbm|cost20|cost40|sell20gp|pricen)$", re.I)
+            MAX_LEN = 80000
+
+
+            def unwrap(raw):
+                if raw is None:
+                    return {}
+                if isinstance(raw, dict):
+                    obj = raw
+                else:
+                    text = str(raw).strip()
+                    if not text:
+                        return {}
+                    try:
+                        obj = json.loads(text)
+                    except Exception:
+                        return {}
+                if not isinstance(obj, dict):
+                    return {}
+                data = obj.get("data")
+                return data if isinstance(data, dict) else obj
+
+
+            def strip_obj(v):
+                if isinstance(v, dict):
+                    out = {}
+                    for k, val in v.items():
+                        if DROP.search(str(k).replace("_", "")):
+                            continue
+                        out[k] = strip_obj(val)
+                    return out
+                if isinstance(v, list):
+                    return [strip_obj(i) for i in v]
+                return v
+
+
+            def hits_of(data):
+                hits = data.get("hits")
+                return hits if isinstance(hits, list) else []
+
+
+            def main(
+                rates_body: str = "",
+                orders_body: str = "",
+                charges_body: str = "",
+                fx_body: str = "",
+                analyzed_json: str = "",
+                skip_rate: float = 0,
+                info_insufficient: float = 0,
+            ) -> dict:
+                rates = unwrap(rates_body)
+                orders = unwrap(orders_body)
+                charges = unwrap(charges_body)
+                try:
+                    fx = json.loads(fx_body or "{}")
+                except Exception:
+                    fx = {}
+                if not isinstance(fx, dict):
+                    fx = {}
+                try:
+                    analyzed = json.loads(analyzed_json or "{}")
+                except Exception:
+                    analyzed = {}
+                if not isinstance(analyzed, dict):
+                    analyzed = {}
+                rh = [strip_obj(h) for h in hits_of(rates)[:1] if isinstance(h, dict)]
+                oh = []
+                for h in hits_of(orders):
+                    if isinstance(h, dict):
+                        oh.append(strip_obj(h))
+                    if len(oh) >= 8:
+                        break
+                items = charges.get("items")
+                if not isinstance(items, list):
+                    items = []
+                items = [strip_obj(i) for i in items if isinstance(i, dict)]
+                usd = fx.get("usd") if isinstance(fx.get("usd"), dict) else fx
+                ctx = {
+                    "analyzed": analyzed,
+                    "rateHit": rh[0] if rh else None,
+                    "orderHits": oh,
+                    "chargeItems": items,
+                    "chargeBusinessTypeLabel": charges.get("businessTypeLabel") or "",
+                    "fxUsd": usd if isinstance(usd, dict) else {},
+                    "skipRate": bool(int(float(skip_rate or 0))),
+                    "infoInsufficient": bool(int(float(info_insufficient or 0))),
+                    "rules": {
+                        "useOnlyFirstRateHit": True,
+                        "noSecondRateSearch": True,
+                        "noCompetitor": True,
+                        "chargeDirOnlyReceivable": 1,
+                    },
+                }
+                text = json.dumps(ctx, ensure_ascii=False)
+                if len(text) > MAX_LEN:
+                    ctx["orderHits"] = oh[:4]
+                    text = json.dumps(ctx, ensure_ascii=False)
+                    if len(text) > MAX_LEN:
+                        text = text[:MAX_LEN]
+                recall_ok = 1 if (rh or oh or items) else 0
+                return {
+                    "context_json": text,
+                    "fx_json": json.dumps(usd if isinstance(usd, dict) else {}, ensure_ascii=False),
+                    "recall_ok": recall_ok,
+                }
+          variables:
+            - variable: rates_body
+              value_selector: [agg_rates, output]
+            - variable: orders_body
+              value_selector: [agg_orders, output]
+            - variable: charges_body
+              value_selector: [agg_charges, output]
+            - variable: fx_body
+              value_selector: [agg_fx, output]
+            - variable: analyzed_json
+              value_selector: [assemble, analyzed_json]
+            - variable: skip_rate
+              value_selector: [assemble, skip_rate]
+            - variable: info_insufficient
+              value_selector: [assemble, info_insufficient]
+          outputs:
+            context_json:
+              type: string
+              children: null
+            fx_json:
+              type: string
+              children: null
+            recall_ok:
+              type: number
+        position: {x: 3340, y: 360}
+        positionAbsolute: {x: 3340, y: 360}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 110
+      - id: synthesize
+        type: custom
+        data:
+          type: llm
+          title: "合成报价草案"
+          model:
+            provider: langgenius/tongyi/tongyi
+            name: qwen3.7-plus
+            mode: chat
+            completion_params:
+              temperature: 0.1
+              enable_thinking: false
+          prompt_template:
+            - id: synth-system
+              role: system
+              text: |
+                你是货代报价合成器。只输出一个 JSON 对象，不要 Markdown 围栏，不要解释。competitorHint 必须是 JSON null。禁止编造金额、禁止写订单号进 fees[].remark、禁止汇率按 1 硬比、禁止从多条运价 hits 拼金额。
+
+                输入是 pack_context.context_json：analyzed、rateHit（至多 hits[0]，含完整 specPrices 与 extras）、orderHits（每条 fees[] 全留）、chargeItems（全部目录）、fxUsd（USD 为 1 时对其它币的汇率）、skipRate、infoInsufficient。
+
+                【规格价选档】对主表与每条 extra 各自对 specPrices[]，对照 analyzed.selectedSpec / cargo 规格 / spec_hint：
+                1. 精确：规格代码全等（40HQ=40HQ）
+                2. 别名：高柜→40HQ，平柜→40GP，开顶→OT 族，框架→FR 族，冷冻→RF 族
+                3. 同族近档（仅上一步没有时）：40HQ↔40GP↔40NOR；20GP 不升到 40；OT 不配 GP；拼箱在 CBM/TON/MIN 里按原文单位选，空则 CBM；空运按计费重靠最近重量档（N/+45/+100…），就近不跨到柜型
+                4. 仍没有可对的同族 → 该行金额 0、selectedFlag=0，不得用清单第一档凑数
+                5. 近档（非精确）时该主运行 needVerify=true，remark 注明「规格按 {selectedSpec} 近似」
+                6. analyzed.specGuessed=true（默认猜的 40HQ/CBM）时主运行 needVerify=true，remark 含「规格按 {selectedSpec} 默认」，hint 追加「请提供更详细的询价信息（港口、运输方式、箱型/货量、品名等），以获得更精准的报价。」
+                把最终档写入 analyzed.selectedSpec。
+
+                【算费】
+                1. 有有效运价：只用 rateHit。主运费与 extras 都从该行 specPrices 选最相似一档。关联费用按 feeKindLabel 分种类，再按 feeName 对齐费用项；无规格价则用 unitPrice/perBill。未匹配种类没有行，不要当成漏报价。不同种类禁止合成一行。同一 chargeCode/规范化中文名禁止两行。
+                2. 无运价有历史：金额来自相似单 fees[]（chargeCode=feeCode 优先，其次规范化中文名），必须声明仅供参考。禁止同义词猜（THC ≠ 目的港操作费）。每条 hit 的 fees[] 全部列出。
+                3. 两边都有：报价仍按这一条运价；侧边仍列出该条市场运价与全部相似单；每项一行涨跌。
+                4. 两边都无（含 skipRate 未调接口、或调了 hits 空）：fees=[]，hint 用「请补充运价中心的数据或联系管理员。」
+                5. 目录有、运价/历史都没有的项：可按目录名补一行，sourceType=DIFY，needVerify=true，remark 含「参考价格，请核实」，金额禁止臆造——无依据则 unitPrice=0 且 selectedFlag=0；hint 追加「{费用名} 在系统历史报价有缺项，已动态填补，请核对。」。用 chargeItems 全部。
+                6. 涨跌：每项一行；模型自选对照哪张历史单；相对差绝对值≥10% 为差距巨大；每一张都巨大则改对 top1 并加差价提示。只比历史应收（feeDirection=1）。先折同规格（单价×询价箱量 ↔ 历史同柜型金额）。币种不同先用 fxUsd 再比；换汇后的涨跌句写出所用汇率与日期；换不到该项不写涨跌、金额照报。对不上费用名 →「历史无此项，无法对照」。不得因历史没有就删掉运价项。
+                7. All-in / 到港：仍按费用项逐行报，不发明一口价合并行。
+                8. quantity：柜型费用用 analyzed.quantity；票结（提单费等）用 1。
+                9. sourceType：运价主表/关联费用 RATE；历史 HISTORY；目录补缺 DIFY。不要 MANUAL。
+                10. totalAmount：只加 selectedFlag=1 且 unitPrice>0 的行；totalCurrency 优先运价币种，否则 USD。
+                11. 费用来源写入 fees[].remark：运价主表「来源=运价中心 {rateId} {rateTypeLabel} {spec}」；关联费用「来源=运价中心 {rateId} {feeKindLabel} {feeName} extraId={extraId}」；历史「来源=相似订单明细 {feeName} {amount}{currency}/{单位}」。禁止写订单号。
+                12. 指定船司/航线未命中（analyzed.carrier/routeName 有值但 rateHit 对应字段不一致）时 hint 追加「未命中指定船司/航线，已按同港有效运价报价，请核对。」且 needVerify=true。不要因此改报空。
+                13. 任一项或合计相对差≥10% 才追加「与相似历史案例差价较大，请复核后再对外报价。」
+
+                【hint 原文】
+                两边都有：本次费用按运价中心当前有效运价生成（最新运价）。匹配到的市场运价与相似历史单均已列出；报价金额以市场运价为准。每个费用项只报一行。
+                只有市场运价：本次费用按运价中心当前有效运价生成（最新运价）。未匹配到足够相似的历史关闭单，故无上浮/下跌对照。
+                只有相似历史单：当前没有匹配的最新运价，本次费用按相似历史订单报价生成，仅供参考。建议在运价中心补充有效运价或联系管理员。
+                未调有效运价接口或 hits 空（无论有无历史以外的两边都无）：请补充运价中心的数据或联系管理员。有历史时仍用上面「只有相似历史单」整句。
+                有运价且 specGuessed：在对应运价 hint 后追加「请提供更详细的询价信息（港口、运输方式、箱型/货量、品名等），以获得更精准的报价。」
+
+                【marketRates】来自 rateHit：unitPrice=选档 amount（无同族则 0）；containerType=analyzed.selectedSpec；priceText=$+千分位单价+/+箱型；rateDate=effectiveDate 或 updateTime 日期；trend 相对本次主运费单价：高上涨、低下跌、否则持平，无法比则空串；rateId=bizId；carrier=carrier。至多 1 条。
+                【similarQuotes】来自 orderHits 全部：quoteNo=bizNo；dealDate=updateTime 日期否则 etd；inquiryStatusLabel 固定「已成交」；summary={originPortCode}-{destPortCode} {cargoSpec或箱型} {第一条应收费用名} {amount}{currency}。
+
+                【steps】三步恒在，HTTP 失败仍 progress=done。仅当你无法输出对象时由下游标 LLM failed。
+
+                短例1（有运价精确档）：{"analyzed":{"ioDirection":1,"ioDirectionLabel":"出口","logisticsType":"SEA","rateType":"FCL_EXPORT","rateTypeLabel":"出口整箱","queryText":"出口整箱 宁波 CNNGB 洛杉矶 USLAX 定制家具 2x40HQ","containerTypes":["40HQ"],"selectedSpec":"40HQ","quantity":2,"skipRate":false,"carrier":"","routeName":"","country":"","transitType":""},"steps":[{"code":"RECALL","name":"检索召回","progress":"done","detail":"匹配运价中心有效运价 + 相似历史成交文案"},{"code":"RULES","name":"规则引擎","progress":"done","detail":"按运输方式与进出口列出应报费用项，校验计费单位"},{"code":"LLM","name":"LLM 合成","progress":"done","detail":"生成预填报价单草稿并注明依据"}],"fees":[{"feeName":"海运费","unitPrice":2480.0,"quantity":2.0,"currencyCode":"USD","amount":4960.0,"remark":"来源=运价中心 R1 出口整箱 40HQ","sourceType":"RATE","chargeUnit":"柜","requiredFlag":1,"selectedFlag":1,"needVerify":false,"trendText":""}],"totalAmount":4960.0,"totalCurrency":"USD","hint":"本次费用按运价中心当前有效运价生成（最新运价）。未匹配到足够相似的历史关闭单，故无上浮/下跌对照。","marketRates":[{"priceText":"$2,480/40HQ","rateDate":"2024-07-01","trend":"持平","unitPrice":2480.0,"containerType":"40HQ","carrier":"","rateId":"R1"}],"similarQuotes":[],"competitorHint":null}
+
+                短例2（仅历史）：fees 的 sourceType=HISTORY，remark 不含订单号，hint 含「仅供参考」，competitorHint 为 null。
+            - id: synth-user
+              role: user
+              text: "{{#pack_context.context_json#}}"
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: false
+        position: {x: 3640, y: 360}
+        positionAbsolute: {x: 3640, y: 360}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 98
+      - id: normalize
+        type: custom
+        data:
+          type: code
+          title: "规范化 result_json"
+          code_language: python3
+          code: |
+            import json
+            import re
+
+            STEPS = [
+                {"code": "RECALL", "name": "检索召回", "progress": "done", "detail": "匹配运价中心有效运价 + 相似历史成交文案"},
+                {"code": "RULES", "name": "规则引擎", "progress": "done", "detail": "按运输方式与进出口列出应报费用项，校验计费单位"},
+                {"code": "LLM", "name": "LLM 合成", "progress": "done", "detail": "生成预填报价单草稿并注明依据"},
+            ]
+            HINT_BOTH = "本次费用按运价中心当前有效运价生成（最新运价）。匹配到的市场运价与相似历史单均已列出；报价金额以市场运价为准。每个费用项只报一行。"
+            HINT_RATE = "本次费用按运价中心当前有效运价生成（最新运价）。未匹配到足够相似的历史关闭单，故无上浮/下跌对照。"
+            HINT_HIST = "当前没有匹配的最新运价，本次费用按相似历史订单报价生成，仅供参考。建议在运价中心补充有效运价或联系管理员。"
+            HINT_DETAIL = "请提供更详细的询价信息（港口、运输方式、箱型/货量、品名等），以获得更精准的报价。"
+            HINT_NO_RATE = "请补充运价中心的数据或联系管理员。"
+
+
+            def peel(text):
+                t = (text or "").strip()
+                t = re.sub(r"^```(?:json)?\s*", "", t, flags=re.I)
+                t = re.sub(r"\s*```$", "", t)
+                return t.strip()
+
+
+            def num(v, default=0.0):
+                try:
+                    if v is None or v == "":
+                        return default
+                    return float(v)
+                except Exception:
+                    return default
+
+
+            def main(llm_text: str = "", analyzed_json: str = "", recall_ok: float = 0, info_insufficient: float = 0, skip_rate: float = 0) -> dict:
+                analyzed = {}
+                try:
+                    analyzed = json.loads(analyzed_json or "{}")
+                except Exception:
+                    analyzed = {}
+                if not isinstance(analyzed, dict):
+                    analyzed = {}
+                for k, d in (
+                    ("ioDirection", 0),
+                    ("ioDirectionLabel", ""),
+                    ("logisticsType", ""),
+                    ("rateType", ""),
+                    ("rateTypeLabel", ""),
+                    ("queryText", ""),
+                    ("containerTypes", []),
+                    ("selectedSpec", ""),
+                    ("quantity", 0),
+                    ("skipRate", False),
+                    ("specGuessed", False),
+                    ("carrier", ""),
+                    ("routeName", ""),
+                    ("country", ""),
+                    ("transitType", ""),
+                ):
+                    if k not in analyzed:
+                        analyzed[k] = d
+                failed = False
+                obj = None
+                try:
+                    obj = json.loads(peel(llm_text))
+                except Exception:
+                    failed = True
+                if not isinstance(obj, dict):
+                    failed = True
+                    obj = {}
+                fees = obj.get("fees") if isinstance(obj.get("fees"), list) else []
+                clean_fees = []
+                for row in fees:
+                    if not isinstance(row, dict):
+                        continue
+                    qty = num(row.get("quantity"), 1.0)
+                    price = num(row.get("unitPrice"), 0.0)
+                    amount = round(price * qty, 2)
+                    nv = row.get("needVerify")
+                    if not isinstance(nv, bool):
+                        nv = False
+                    sf = row.get("selectedFlag")
+                    try:
+                        sf = int(sf)
+                    except Exception:
+                        sf = 1 if price > 0 else 0
+                    rf = row.get("requiredFlag")
+                    try:
+                        rf = int(rf)
+                    except Exception:
+                        rf = 1
+                    st = str(row.get("sourceType") or "")
+                    if st not in ("RATE", "HISTORY", "DIFY"):
+                        st = "DIFY" if price == 0 else "RATE"
+                    clean_fees.append({
+                        "feeName": str(row.get("feeName") or ""),
+                        "unitPrice": round(price, 2),
+                        "quantity": qty,
+                        "currencyCode": str(row.get("currencyCode") or "USD"),
+                        "amount": amount,
+                        "remark": str(row.get("remark") or ""),
+                        "sourceType": st,
+                        "chargeUnit": str(row.get("chargeUnit") or ""),
+                        "requiredFlag": rf,
+                        "selectedFlag": sf,
+                        "needVerify": nv,
+                        "trendText": str(row.get("trendText") or ""),
+                    })
+                if failed:
+                    clean_fees = []
+                total = 0.0
+                cur = str(obj.get("totalCurrency") or "USD")
+                for row in clean_fees:
+                    if row["selectedFlag"] == 1 and row["unitPrice"] > 0:
+                        total += row["amount"]
+                        if row.get("currencyCode"):
+                            cur = row["currencyCode"]
+                spec_guessed = bool(analyzed.get("specGuessed"))
+                if spec_guessed:
+                    for row in clean_fees:
+                        if row["sourceType"] == "RATE" and "默认" not in row["remark"]:
+                            row["needVerify"] = True
+                            if row["remark"]:
+                                row["remark"] = row["remark"] + " 规格按 %s 默认" % (analyzed.get("selectedSpec") or "40HQ")
+                            else:
+                                row["remark"] = "规格按 %s 默认" % (analyzed.get("selectedSpec") or "40HQ")
+                hint = str(obj.get("hint") or "")
+                if failed:
+                    hint = HINT_NO_RATE
+                mr = obj.get("marketRates") if isinstance(obj.get("marketRates"), list) else []
+                sq = obj.get("similarQuotes") if isinstance(obj.get("similarQuotes"), list) else []
+                if failed:
+                    mr, sq = [], []
+                steps = [dict(x) for x in STEPS]
+                if failed:
+                    steps[2]["progress"] = "failed"
+                has_r = bool(mr) and not int(float(skip_rate or 0))
+                has_h = bool(sq)
+                if not has_r and not has_h:
+                    hint = HINT_NO_RATE
+                elif not has_r and has_h:
+                    hint = HINT_HIST
+                elif not hint:
+                    hint = HINT_BOTH if has_h else HINT_RATE
+                if has_r and spec_guessed and HINT_DETAIL not in hint:
+                    hint = (hint + " " + HINT_DETAIL).strip()
+                out = {
+                    "analyzed": analyzed,
+                    "steps": steps,
+                    "fees": clean_fees,
+                    "totalAmount": round(total, 2),
+                    "totalCurrency": cur or "USD",
+                    "hint": hint,
+                    "marketRates": mr,
+                    "similarQuotes": sq,
+                    "competitorHint": None,
+                }
+                return {"result_json": json.dumps(out, ensure_ascii=False)}
+          variables:
+            - variable: llm_text
+              value_selector: [synthesize, text]
+            - variable: analyzed_json
+              value_selector: [assemble, analyzed_json]
+            - variable: recall_ok
+              value_selector: [pack_context, recall_ok]
+            - variable: info_insufficient
+              value_selector: [assemble, info_insufficient]
+            - variable: skip_rate
+              value_selector: [assemble, skip_rate]
+          outputs:
+            result_json:
+              type: string
+              children: null
+        position: {x: 3940, y: 360}
+        positionAbsolute: {x: 3940, y: 360}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 100
+      - id: end
+        type: custom
+        data:
+          type: end
+          title: "输出报价草案"
+          outputs:
+            - variable: result_json
+              value_selector: [normalize, result_json]
+              value_type: string
+        position: {x: 4240, y: 360}
+        positionAbsolute: {x: 4240, y: 360}
+        sourcePosition: right
+        targetPosition: left
+        width: 244
+        height: 90
+    edges:
+      - id: start-source-join_inquiry-target
+        source: start
+        sourceHandle: source
+        target: join_inquiry
+        targetHandle: target
+        type: custom
+        data: {sourceType: start, targetType: template-transform, isInIteration: false, isInLoop: false}
+      - id: start-source-need_supp-target
+        source: start
+        sourceHandle: source
+        target: need_supp
+        targetHandle: target
+        type: custom
+        data: {sourceType: start, targetType: if-else, isInIteration: false, isInLoop: false}
+      - id: join_inquiry-source-infer_route-target
+        source: join_inquiry
+        sourceHandle: source
+        target: infer_route
+        targetHandle: target
+        type: custom
+        data: {sourceType: template-transform, targetType: parameter-extractor, isInIteration: false, isInLoop: false}
+      - id: infer_route-source-assemble-target
+        source: infer_route
+        sourceHandle: source
+        target: assemble
+        targetHandle: target
+        type: custom
+        data: {sourceType: parameter-extractor, targetType: code, isInIteration: false, isInLoop: false}
+      - id: need_supp-has_supp-parse_supplement-target
+        source: need_supp
+        sourceHandle: has_supp
+        target: parse_supplement
+        targetHandle: target
+        type: custom
+        data: {sourceType: if-else, targetType: parameter-extractor, isInIteration: false, isInLoop: false}
+      - id: need_supp-false-empty_supp-target
+        source: need_supp
+        sourceHandle: false
+        target: empty_supp
+        targetHandle: target
+        type: custom
+        data: {sourceType: if-else, targetType: code, isInIteration: false, isInLoop: false}
+      - id: parse_supplement-source-pack_supp-target
+        source: parse_supplement
+        sourceHandle: source
+        target: pack_supp
+        targetHandle: target
+        type: custom
+        data: {sourceType: parameter-extractor, targetType: code, isInIteration: false, isInLoop: false}
+      - id: pack_supp-source-agg_supp-target
+        source: pack_supp
+        sourceHandle: source
+        target: agg_supp
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: empty_supp-source-agg_supp-target
+        source: empty_supp
+        sourceHandle: source
+        target: agg_supp
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: agg_supp-source-assemble-target
+        source: agg_supp
+        sourceHandle: source
+        target: assemble
+        targetHandle: target
+        type: custom
+        data: {sourceType: variable-aggregator, targetType: code, isInIteration: false, isInLoop: false}
+      - id: assemble-source-need_rate-target
+        source: assemble
+        sourceHandle: source
+        target: need_rate
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: if-else, isInIteration: false, isInLoop: false}
+      - id: assemble-source-need_charge-target
+        source: assemble
+        sourceHandle: source
+        target: need_charge
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: if-else, isInIteration: false, isInLoop: false}
+      - id: assemble-source-search_orders-target
+        source: assemble
+        sourceHandle: source
+        target: search_orders
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: http-request, isInIteration: false, isInLoop: false}
+      - id: assemble-source-fetch_fx-target
+        source: assemble
+        sourceHandle: source
+        target: fetch_fx
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: http-request, isInIteration: false, isInLoop: false}
+      - id: need_rate-do_rate-search_rates-target
+        source: need_rate
+        sourceHandle: do_rate
+        target: search_rates
+        targetHandle: target
+        type: custom
+        data: {sourceType: if-else, targetType: http-request, isInIteration: false, isInLoop: false}
+      - id: need_rate-false-empty_rates-target
+        source: need_rate
+        sourceHandle: false
+        target: empty_rates
+        targetHandle: target
+        type: custom
+        data: {sourceType: if-else, targetType: code, isInIteration: false, isInLoop: false}
+      - id: search_rates-source-agg_rates-target
+        source: search_rates
+        sourceHandle: source
+        target: agg_rates
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: search_rates-fail-branch-empty_rates-target
+        source: search_rates
+        sourceHandle: fail-branch
+        target: empty_rates
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: code, isInIteration: false, isInLoop: false}
+      - id: empty_rates-source-agg_rates-target
+        source: empty_rates
+        sourceHandle: source
+        target: agg_rates
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: search_orders-source-agg_orders-target
+        source: search_orders
+        sourceHandle: source
+        target: agg_orders
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: search_orders-fail-branch-empty_orders-target
+        source: search_orders
+        sourceHandle: fail-branch
+        target: empty_orders
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: code, isInIteration: false, isInLoop: false}
+      - id: empty_orders-source-agg_orders-target
+        source: empty_orders
+        sourceHandle: source
+        target: agg_orders
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: need_charge-do_charge-list_charges-target
+        source: need_charge
+        sourceHandle: do_charge
+        target: list_charges
+        targetHandle: target
+        type: custom
+        data: {sourceType: if-else, targetType: http-request, isInIteration: false, isInLoop: false}
+      - id: need_charge-false-empty_charges-target
+        source: need_charge
+        sourceHandle: false
+        target: empty_charges
+        targetHandle: target
+        type: custom
+        data: {sourceType: if-else, targetType: code, isInIteration: false, isInLoop: false}
+      - id: list_charges-source-agg_charges-target
+        source: list_charges
+        sourceHandle: source
+        target: agg_charges
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: list_charges-fail-branch-empty_charges-target
+        source: list_charges
+        sourceHandle: fail-branch
+        target: empty_charges
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: code, isInIteration: false, isInLoop: false}
+      - id: empty_charges-source-agg_charges-target
+        source: empty_charges
+        sourceHandle: source
+        target: agg_charges
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: fetch_fx-source-agg_fx-target
+        source: fetch_fx
+        sourceHandle: source
+        target: agg_fx
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: fetch_fx-fail-branch-fx_fallback-target
+        source: fetch_fx
+        sourceHandle: fail-branch
+        target: fx_fallback
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: http-request, isInIteration: false, isInLoop: false}
+      - id: fx_fallback-source-agg_fx-target
+        source: fx_fallback
+        sourceHandle: source
+        target: agg_fx
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: fx_fallback-fail-branch-empty_fx-target
+        source: fx_fallback
+        sourceHandle: fail-branch
+        target: empty_fx
+        targetHandle: target
+        type: custom
+        data: {sourceType: http-request, targetType: code, isInIteration: false, isInLoop: false}
+      - id: empty_fx-source-agg_fx-target
+        source: empty_fx
+        sourceHandle: source
+        target: agg_fx
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: variable-aggregator, isInIteration: false, isInLoop: false}
+      - id: agg_rates-source-pack_context-target
+        source: agg_rates
+        sourceHandle: source
+        target: pack_context
+        targetHandle: target
+        type: custom
+        data: {sourceType: variable-aggregator, targetType: code, isInIteration: false, isInLoop: false}
+      - id: agg_orders-source-pack_context-target
+        source: agg_orders
+        sourceHandle: source
+        target: pack_context
+        targetHandle: target
+        type: custom
+        data: {sourceType: variable-aggregator, targetType: code, isInIteration: false, isInLoop: false}
+      - id: agg_charges-source-pack_context-target
+        source: agg_charges
+        sourceHandle: source
+        target: pack_context
+        targetHandle: target
+        type: custom
+        data: {sourceType: variable-aggregator, targetType: code, isInIteration: false, isInLoop: false}
+      - id: agg_fx-source-pack_context-target
+        source: agg_fx
+        sourceHandle: source
+        target: pack_context
+        targetHandle: target
+        type: custom
+        data: {sourceType: variable-aggregator, targetType: code, isInIteration: false, isInLoop: false}
+      - id: pack_context-source-synthesize-target
+        source: pack_context
+        sourceHandle: source
+        target: synthesize
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: llm, isInIteration: false, isInLoop: false}
+      - id: synthesize-source-normalize-target
+        source: synthesize
+        sourceHandle: source
+        target: normalize
+        targetHandle: target
+        type: custom
+        data: {sourceType: llm, targetType: code, isInIteration: false, isInLoop: false}
+      - id: normalize-source-end-target
+        source: normalize
+        sourceHandle: source
+        target: end
+        targetHandle: target
+        type: custom
+        data: {sourceType: code, targetType: end, isInIteration: false, isInLoop: false}
+    viewport: {x: 0, y: 0, zoom: 0.35}

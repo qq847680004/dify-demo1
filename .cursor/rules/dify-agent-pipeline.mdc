@@ -5,13 +5,13 @@ alwaysApply: true
 
 # 生产流水线
 
-本仓库只产出可导入 Dify 1.16.x 的 App DSL。文档站点示例版本为 1.16.1；DSL 形状以 `$dify-workflow-dsl` 的 0.7.0 / 1.16.0 源码基线为准。冲突时以当次 MCP 节点页为准，不要把文档全文抄进规则。
+本仓库只产出可导入 **Dify 1.17.0** 的 App DSL。顶层 YAML 仍为 `version: "0.7.0"`（1.17.0 的 `CURRENT_APP_DSL_VERSION`）。文档以当次 `dify-docs` MCP 为准；DSL 形状以 `$dify-workflow-dsl` 的 0.7.0 规则为准，源码基线优先 GitHub tag `1.17.0`。skill 内 `examples/dify-1.16.0/` 只作图结构参考。冲突时以当次 MCP 节点页与 1.17.0 源码为准，不要把文档全文抄进规则。
 
 权威顺序（每次生成或改 YAML 都要走）：
 
 1. 用 `dify-docs` MCP（`search_dify_docs` language=`zh`，再 `query_docs_filesystem_dify_docs` 读 `.mdx`）核对**当次用到的**节点、导入导出、MCP 发布。中英文冲突以英文原版为准。
 2. 用 `$dify-workflow-dsl` 写 YAML。不要凭记忆发明 `provider_id`、插件 identity、`data.type` 或 Agent 包字段。
-3. 对照 skill 内 `examples/dify-1.16.0/`，尤其 `10-agent-app.yml` 与 `09-agent-v2-workflow.yml`。
+3. 对照 skill 内 `examples/dify-1.16.0/`，尤其 `10-agent-app.yml` 与 `09-agent-v2-workflow.yml`；1.17 行为差异（如 Agent v2 默认输出）以 `.cursor/rules` 与 MCP 覆盖 skill 旧说明。
 
 落盘：
 

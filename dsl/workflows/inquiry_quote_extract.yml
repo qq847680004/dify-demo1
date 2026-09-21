@@ -2,7 +2,7 @@ version: "0.7.0"
 kind: app
 app:
   name: "询价字段抽取"
-  description: "从客户询价文本中抽出固定 11 键业务字段（含置信度），并以严格 JSON 字符串输出"
+  description: "从客户询价文本中抽出固定 11 键业务字段（含置信度）及补充信息 supplement，并以严格 JSON 字符串输出"
   icon: "📦"
   icon_type: emoji
   icon_background: "#E4FBCC"
@@ -66,6 +66,16 @@ workflow:
             - cargo_name：货物品名原文。
             - cargo_spec：规格原文（重量/体积/件数等）。
             - service_scope：原文服务项；多项用「 / 」（两侧各一空格）连接。
+
+            补充信息（写入 supplement，无置信度；没写明必须空字符串，禁止猜测 MSC/直达/美国）：
+            - carrier：船司/航司原文。禁止把品名或客户名写成船司。
+            - route_name：航线名，如美西。
+            - route_code：航线代码。
+            - country：目的国/国家原文，不擅自改 ISO，禁止由港码（如 USLAX）推断国家。
+            - transit_type：仅用户明确时填「直达」或「中转」。禁止把「尽量快」写成直达。
+            - origin_terminal / dest_terminal：起运/目的码头。不要把港口城市名填成码头。
+            - schedule_note：船期/班期原文。禁止用船期冒充 transit_type。
+            - spec_hint：口语/别名规格线索（如「两个高柜」）。已完整写入 cargo_spec 的标准规格不要重复填。
 
             置信度规则（逐字段独立判定）：
             - 置信高：原文直接出现该值，或封闭枚举完整出现（如「海运」「空运」「CIF」）。
@@ -176,6 +186,42 @@ workflow:
               type: string
               description: "service_scope 的置信度：置信高、置信中或置信低"
               required: false
+            - name: carrier
+              type: string
+              description: "船司/航司原文，未写明则空"
+              required: false
+            - name: route_name
+              type: string
+              description: "航线名，未写明则空"
+              required: false
+            - name: route_code
+              type: string
+              description: "航线代码，未写明则空"
+              required: false
+            - name: country
+              type: string
+              description: "国家原文，未写明则空"
+              required: false
+            - name: transit_type
+              type: string
+              description: "仅直达或中转，未写明则空"
+              required: false
+            - name: origin_terminal
+              type: string
+              description: "起运码头，未写明则空"
+              required: false
+            - name: dest_terminal
+              type: string
+              description: "目的码头，未写明则空"
+              required: false
+            - name: schedule_note
+              type: string
+              description: "船期原文，未写明则空"
+              required: false
+            - name: spec_hint
+              type: string
+              description: "口语规格线索，未写明则空"
+              required: false
           query: [start, inquiry_text]
           reasoning_mode: prompt
           vision:
@@ -225,6 +271,7 @@ workflow:
                 "origin_port_en", "origin_port_zh", "dest_port_en", "dest_port_zh",
                 "cargo_name", "cargo_spec", "trade_terms", "service_scope",
             ]
+            ALLOWED_TRANSIT = {"直达", "中转"}
             EMAIL_RE = re.compile(
                 r"([A-Za-z0-9._%+\-]+)@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
             )
@@ -304,6 +351,29 @@ workflow:
                     confidence = "置信低"
                 return {"value": value, "confidence": confidence}
 
+            def pack_supplement(carrier, route_name, route_code, country, transit_type,
+                                origin_terminal, dest_terminal, schedule_note, spec_hint):
+                transit = as_str(transit_type)
+                if transit not in ALLOWED_TRANSIT:
+                    transit = ""
+                parts = []
+                pairs = [
+                    ("船司", as_str(carrier)),
+                    ("航线", as_str(route_name)),
+                    ("航线代码", as_str(route_code)),
+                    ("国家", as_str(country)),
+                    ("", transit),
+                    ("起运码头", as_str(origin_terminal)),
+                    ("目的码头", as_str(dest_terminal)),
+                    ("船期", as_str(schedule_note)),
+                    ("", as_str(spec_hint)),
+                ]
+                for label, value in pairs:
+                    if not value:
+                        continue
+                    parts.append(label + value if label else value)
+                return " ".join(parts)
+
             def main(
                 inquiry_text: str = None,
                 fuzzy_match_customer: float = 0,
@@ -331,6 +401,15 @@ workflow:
                 trade_terms_confidence: str = None,
                 service_scope: str = None,
                 service_scope_confidence: str = None,
+                carrier: str = None,
+                route_name: str = None,
+                route_code: str = None,
+                country: str = None,
+                transit_type: str = None,
+                origin_terminal: str = None,
+                dest_terminal: str = None,
+                schedule_note: str = None,
+                spec_hint: str = None,
             ) -> dict:
                 customer_name, customer_name_confidence = apply_customer_fallback(
                     customer_name,
@@ -355,6 +434,10 @@ workflow:
                 payload = {}
                 for name, val, conf in zip(FIELD_ORDER, values, confidences):
                     payload[name] = pack_field(name, val, conf)
+                payload["supplement"] = pack_supplement(
+                    carrier, route_name, route_code, country, transit_type,
+                    origin_terminal, dest_terminal, schedule_note, spec_hint,
+                )
                 return {"result_json": json.dumps(payload, ensure_ascii=False)}
           variables:
             - variable: inquiry_text
@@ -409,6 +492,24 @@ workflow:
               value_selector: [extract_fields, service_scope]
             - variable: service_scope_confidence
               value_selector: [extract_fields, service_scope_confidence]
+            - variable: carrier
+              value_selector: [extract_fields, carrier]
+            - variable: route_name
+              value_selector: [extract_fields, route_name]
+            - variable: route_code
+              value_selector: [extract_fields, route_code]
+            - variable: country
+              value_selector: [extract_fields, country]
+            - variable: transit_type
+              value_selector: [extract_fields, transit_type]
+            - variable: origin_terminal
+              value_selector: [extract_fields, origin_terminal]
+            - variable: dest_terminal
+              value_selector: [extract_fields, dest_terminal]
+            - variable: schedule_note
+              value_selector: [extract_fields, schedule_note]
+            - variable: spec_hint
+              value_selector: [extract_fields, spec_hint]
           outputs:
             result_json:
               type: string

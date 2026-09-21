@@ -1,11 +1,11 @@
 ---
-description: Dify 1.16 App DSL 0.7.0 图结构、节点 ID、边与变量引用
+description: Dify 1.17 App DSL 0.7.0 图结构、节点 ID、边与变量引用
 alwaysApply: true
 ---
 
 # DSL 0.7.0 图结构
 
-- 顶层固定：`version: "0.7.0"`（必须加引号）、`kind: app`。
+- 目标产品 **Dify 1.17.0**；顶层固定：`version: "0.7.0"`（必须加引号）、`kind: app`。不要把产品版本写进 YAML `version`。
 - 图模式必须同时有 `workflow.graph.nodes` 与 `workflow.graph.edges`。
 - 节点包装 `type` 一般为 `custom`；运行时种类在 `data.type`。文档中文名（如「输出」）不等于 `data.type`；以 skill schema + 当次 MCP 为准（当前终点为 `end`）。
 - 节点 ID 只用字母、数字、下划线，长度 1–50。不要用连字符（`{{#node_id.field#}}` 会失败）。
@@ -22,9 +22,11 @@ alwaysApply: true
 
 - `if-else` → case ID 或 `false`
 - `question-classifier` → class ID
-- `human-input` → `user_actions[].id`（超时用 `__timeout`）
+- `human-input` → `user_actions[].id`（超时用 `__timeout`）；1.17 允许放在 Loop / Iteration 内，边规则不变
 
 参数提取器：参数类型 `string` / `number` / `boolean` / `array` / `object`；`reasoning_mode` 优先 `function_call`；失败看 `__is_success` / `__reason`。下游需要完整 JSON 时用 `code` 装配缺省，不要假定提取器必成功。
+
+多枚 LLM 共用同一模型时，用工作区 **LLM 型环境变量** 引用，不要在每个节点写死可漂移配置；具体字段以 MCP / 工作区导出为准，不要发明键名。
 
 LLM 节点即使关闭检索也必须带：
 

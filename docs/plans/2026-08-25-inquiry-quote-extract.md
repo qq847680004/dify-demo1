@@ -2,7 +2,7 @@
 
 > **For agentic workers:** 按 Task 顺序逐步实施本计划；使用 checkbox（`- [ ]` / `- [x]`）跟踪进度。实施时显式使用 `$dify-workflow-dsl` skill。
 
-**Goal:** 生成可导入 Dify 1.16 的 Workflow DSL：输入客户**询价文本**，结构化抽出客户、运输方式、**起运/目的地（含各类地点代码）**、货品、服务与条款相关字段；**每个字段附带置信度**；流程终点严格输出含全部键的 JSON（值 + 置信度双层结构，字符串缺省 `""`、置信度缺省 `置信低`）。
+**Goal:** 生成可导入 Dify 1.16 的 Workflow DSL：输入客户**询价文本**，结构化抽出客户、运输方式、**起运/目的地（含各类地点代码）**、货品、服务与条款相关字段；**每个字段附带置信度**；并按报价推荐的 `parse_supplement` **同口径**抽出运价/订单检索所需补充线索，由 `build_json` 拼成**一段文字** `supplement` 给后端落库（不是 JSON 对象）。流程终点严格输出含全部业务键 + `supplement` 字符串的 JSON（业务键为值 + 置信度双层结构，字符串缺省 `""`、置信度缺省 `置信低`）。
 
 **Architecture（v2 修订）：** 单次运行的 `workflow`（非 Chatflow）。图结构仍为 `start → parameter-extractor → code → end`。**不新增第二个 LLM 节点**——在现有参数提取器单次调用中同步产出字段值与置信度；`code` 节点负责枚举校验、置信度降级与 JSON 装配。详见下文「置信度设计决策」。
 
@@ -19,8 +19,8 @@
 | 运输方式字段 | `logistics_type`：`海运`/`空运`/`陆运` | `transport_mode`：5 档封闭枚举（`空运`/`海运`/`铁运`/`汽运`/`多式联运`） |
 | 贸易条款字段 | `quote_terms`：原文第一个条款词 | `trade_terms`：12 个 Incoterms 缩写封闭枚举 |
 | 紧急程度 | `urgency_level`：`紧急`/`普通` | `urgency_level`：`普通`/`加急`（**Breaking**：`紧急` 归一为 `加急`） |
-| 输出形状 | 11 键平铺字符串 | 11 键，每键 `{ value, confidence }` |
-| 图结构 | 4 节点 | 仍为 4 节点（不增 LLM） |
+| 输出形状 | 11 键平铺字符串 | 11 键，每键 `{ value, confidence }`，另加 `supplement` 字符串 |
+| 图结构 | 4 节点 | 仍为 4 节点（不增 LLM；补充线索与 11 键同 pass） |
 
 **Breaking change：** API 消费方若已对接 v1 的 `result_json` 平铺结构，须同步升级解析逻辑。运输方式相对本计划原稿 7 档：取消 `海运 FCL`/`海运 LCL` 与 `快递`；`铁路` 改为 `铁运`，`公路` 改为 `汽运`；仅写「海运」现输出 `海运`。
 
@@ -33,7 +33,7 @@
 - 落盘：`dsl/workflows/inquiry_quote_extract.yml`
 - 节点 ID：仅字母、数字、下划线，长度 1–50
 - 禁止写入 API Key、credential ID、MCP URL、私有 dataset ID
-- 终点必须输出严格 JSON：键集合与字段契约完全一致；不得缺少任一键
+- 终点必须输出严格 JSON：11 个业务键 + `supplement`；不得缺少任一键
 - 单值冲突策略：**取文本中先出现的那个**（公司名、运输方式、贸易条款）；见 ADR-0001
 - 交付前必须：`python scripts/validate_dsl.py --strict --target-version 0.7.0 dsl/workflows/inquiry_quote_extract.yml`
 - 导入后须在目标工作区重连模型凭据后再试跑；禁止声称「导入即可运行」
@@ -165,6 +165,35 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 
 ---
 
+## 补充信息 `supplement`（与报价推荐同口径）
+
+询价原文里除 11 个基础字段外，还可能写船司、航线、码头、直达/中转、船期等。提取器按 `docs/plans/2026-09-18-inquiry-quote-recommend.md` 的 `parse_supplement` **同口径**抽出九个线索；**不新增 LLM / 不新增参数提取器节点**，仍在原 `extract_fields` 单次调用里多抽这九个参数。`build_json` 把非空线索拼成**一段自由文本**写入 `result_json.supplement`（类型 string），后端当段落落库，后续可原样填入推荐流 `start.supplement`。
+
+拼装规则（空项省略，空格连接）：
+
+```text
+船司{carrier} 航线{route_name} 航线代码{route_code} 国家{country} {transit_type} 起运码头{origin_terminal} 目的码头{dest_terminal} 船期{schedule_note} {spec_hint}
+```
+
+例：`船司MSC 航线美西 直达 船期周班`。九键全空 → `""`。禁止输出 JSON 对象。
+
+**不**为这九个线索再出置信度。**不**把港码/地名/品名/条款/服务范围再塞进这段文字（那些已在 11 键）。**不**根据港码猜国家、不把「尽量快」写成直达、不把品名写成船司、不把船期写成 `transit_type`。
+
+| 抽出字段 | 类型 | 何时有值 | 三个 ai-data 接口用法（推荐流 assemble，本应用只抽出） |
+| --- | --- | --- | --- |
+| `carrier` | string | 船司/航司原文，如 MSC、马士基 | 运价：有则精确 + 写入检索句；订单：进检索句；费用项：不传 |
+| `route_name` | string | 航线名，如 美西 | 同上 |
+| `route_code` | string | 航线代码 | 同上 |
+| `country` | string | 目的国/国家**原文**，不擅自改 ISO | 同上 |
+| `transit_type` | string | 仅用户明确时：`直达` 或 `中转` | 同上 |
+| `origin_terminal` / `dest_terminal` | string | 起运/目的码头 | 运价：必须精确；订单：进检索句；费用项：不传 |
+| `schedule_note` | string | 船期/班期原文 | **仅检索句**；禁止冒充 `validOn` / `transit_type` |
+| `spec_hint` | string | 口语/别名规格线索（如「两个高柜」） | 与 `cargo_spec` 一并给推荐流选档；已完整写入 `cargo_spec` 的标准规格（如 `2x40HQ`）不要重复填 |
+
+`code` 兜底：各键 strip；`none`/`null` → `""`；`transit_type` 不在 `{直达, 中转}` → `""`。提取失败仍输出 9 键全空对象。
+
+---
+
 ### 置信度（每字段必有）
 
 | 属性 | 变量后缀 | 类型 | 允许值 | 缺省 |
@@ -250,15 +279,17 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
   "cargo_name": { "value": "", "confidence": "置信低" },
   "cargo_spec": { "value": "", "confidence": "置信低" },
   "trade_terms": { "value": "", "confidence": "置信低" },
-  "service_scope": { "value": "", "confidence": "置信低" }
+  "service_scope": { "value": "", "confidence": "置信低" },
+  "supplement": ""
 }
 ```
 
 规则：
 
-- 必须包含上述全部 **11** 个键，禁止增删键名。
-- 禁止 `null`、禁止省略 `value` / `confidence`。
-- `__is_success=0` 或上游全空时，仍输出上表空壳（各 `value=""`，`confidence="置信低"`）。
+- 必须包含上述全部 **11** 个业务键 + `supplement`（**字符串**），禁止增删键名。
+- 11 个业务键禁止 `null`、禁止省略 `value` / `confidence`。
+- `supplement` 为一段文字，禁止对象、禁止 `null`；无线索则为 `""`。
+- `__is_success=0` 或上游全空时，仍输出上表空壳（业务键 `value=""` / `confidence="置信低"`，`supplement=""`）。
 - `end` **只需**输出 `result_json`。
 
 ---
@@ -290,8 +321,8 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 | 节点 ID | `data.type` | 输入 | 输出 |
 | --- | --- | --- | --- |
 | `start` | `start` | `inquiry_text`（paragraph，必填） | `inquiry_text` |
-| `extract_fields` | `parameter-extractor` | `query: [start, inquiry_text]` | 11 业务字段 + 11 `{field}_confidence` + `__is_success` / `__reason` |
-| `build_json` | `code` | 22 个字符串入参 | `result_json`（string） |
+| `extract_fields` | `parameter-extractor` | `query: [start, inquiry_text]` | 11 业务字段 + 11 `{field}_confidence` + 客户回退辅助字段 + 9 个 supplement 键 + `__is_success` / `__reason` |
+| `build_json` | `code` | 业务值/置信度 + supplement 9 键 | `result_json`（string） |
 | `end` | `end` | `[build_json, result_json]` | `result_json` |
 
 边：`start → extract_fields → build_json → end`（不变）。
@@ -302,6 +333,8 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 
 置信度：`customer_name_confidence`、`transport_mode_confidence`、`urgency_level_confidence`、`origin_port_en_confidence`、`origin_port_zh_confidence`、`dest_port_en_confidence`、`dest_port_zh_confidence`、`cargo_name_confidence`、`cargo_spec_confidence`、`trade_terms_confidence`、`service_scope_confidence`
 
+补充信息（无置信度）：`carrier`、`route_name`、`route_code`、`country`、`transit_type`、`origin_terminal`、`dest_terminal`、`schedule_note`、`spec_hint`
+
 ### `extract_fields.instruction` 要点（v2）
 
 - 输入是客户询价原文；只抽取、禁止臆造。
@@ -310,6 +343,7 @@ JSON 键名仍为 `origin_port_*` / `dest_port_*`（v1 延续，**不表示仅�
 - 起运/目的地四字段：`_*_en` **英文/代码优先**（见上节）；铁路含电报码、UIC、英文站名；与运输方式联动但不跨码制补全。
 - 其余字段规则延续 v1（先出现、`service_scope` 用 ` / ` 等）。
 - 字符串未出现 → `value=""`，对应 `confidence` 建议 `置信低`。
+- 同步抽出 `supplement` 九键：没写明必须空串；禁止猜测 MSC/直达/美国；禁止把港码译成国家。
 
 ### `build_json`（Python `main`）要点（v2）
 
@@ -359,8 +393,8 @@ FIELD_ORDER = [
 6. 返回 {"value": value, "confidence": confidence}
 ```
 
-- `json.dumps(..., ensure_ascii=False)` 按 `FIELD_ORDER` 固定 11 键顺序输出。
-- 上游 `__is_success=0` 或全空时仍输出完整空壳 JSON。
+- `json.dumps(..., ensure_ascii=False)` 按 `FIELD_ORDER` 固定 11 键，其后固定键 `supplement`。
+- 上游 `__is_success=0` 或全空时仍输出完整空壳 JSON（含空 `supplement`）。
 
 ---
 
@@ -448,7 +482,8 @@ FIELD_ORDER = [
   "cargo_name": { "value": "塑料配件", "confidence": "置信高" },
   "cargo_spec": { "value": "约1,200KG，6CBM", "confidence": "置信高" },
   "trade_terms": { "value": "CIF", "confidence": "置信高" },
-  "service_scope": { "value": "订舱 / 起运港 THC / 目的港 THC", "confidence": "置信高" }
+  "service_scope": { "value": "订舱 / 起运港 THC / 目的港 THC", "confidence": "置信高" },
+  "supplement": ""
 }
 ```
 
@@ -539,6 +574,16 @@ Rail freight. Origin VNP/北京南 to EAY/西安北. Cargo: auto parts.
 - `origin_port_en` = `CNNGB`，`origin_port_zh` = `宁波`（海运段港口码）
 - `dest_port_en` = `FRA`，`dest_port_zh` = `法兰克福`（空运段机场码；与运输方式「多式联运」一致，置信高或中）
 
+**试跑样例 G（补充信息线索）：**
+
+```text
+客户：宁波海天贸易有限公司
+走海运，尽量MSC直达 美西航线 周班。起运 CNNGB/宁波，目的 USLAX/洛杉矶。
+货名：塑料配件。两个高柜。条款 CIF。
+```
+
+**期望 `supplement` 字符串：** `"船司MSC 航线美西 直达 船期周班 两个高柜"`（`spec_hint` 若已并入 `cargo_spec` 且无额外口语线索则可无「两个高柜」）。未写明国家/航线代码/码头则不要出现对应片段，禁止由 USLAX 猜美国。
+
 ---
 
 ## 明确不做（YAGNI）
@@ -547,6 +592,8 @@ Rail freight. Origin VNP/北京南 to EAY/西安北. Cargo: auto parts.
 - 不做 Agent v2 / 知识库 / HTTP 回写
 - **不做第二个 LLM 节点专责置信度**（除非 v2 试跑后单 pass 置信度验收不达标，再开 ADR 复审）
 - 不做地点代码补全表（港口 / 机场 / 铁路等码制互转）
+- 不在抽取工作流内调用 ai-data 三个检索接口；只抽出 `supplement` 供后端落库
+- 不为 `supplement` 各键产出置信度
 - 不恢复 `is_urgent`、金额/币种
 - 不在未要求时提交 git commit
 
@@ -566,6 +613,7 @@ Rail freight. Origin VNP/北京南 to EAY/西安北. Cargo: auto parts.
 | `_*_en` 英文/代码优先 | 英文优先原则 + 铁路电报码/UIC/英文站名 |
 | 地点码制不做白名单校验 | `build_json` 仅 strip / 中文后缀 |
 | Breaking API 变更 | v2 变更摘要 |
+| 补充信息拼成一段文字 | `extract_fields` 同 pass 抽九线索 + `build_json` 拼字符串 |
 | v1 已完成部分 | Task 1–3（v1）已勾选；**v2 Task 0–3 待实施** |
 
 ---

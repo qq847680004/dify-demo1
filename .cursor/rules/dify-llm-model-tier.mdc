@@ -1,0 +1,34 @@
+---
+description: LLM/抽取节点按任务复杂度选通义 Flash 或 Plus，默认 Flash
+alwaysApply: true
+---
+
+# LLM 模型档位
+
+凡 `data.type` 为 `llm`、`parameter-extractor`、`question-classifier` 的节点，先判任务复杂度再填 `model.name`。`provider` 沿用工作区已有 `langgenius/tongyi/tongyi`，禁止发明模型名。默认 **Flash**；只有判定为复杂时才用 **Plus**。
+
+占位名（导入后重连）：
+
+- 文本 Flash：`qwen3.7-flash`（工作区若已导出带日期快照如 `qwen3.7-flash-2026-07-15`，与 Flash 同档，照抄导出，勿混用两套）
+- 文本 Plus：`qwen3.7-plus`
+- 看图：只用已列视觉模型（如 `qwen3-vl-flash`），不要用文本 Plus 吃图
+
+## 用 Flash（简单）
+
+任务是短上下文上的分类、枚举、字段抽取、是否/路由、规范化（别名→代码），输出键少且失败可被下游 `code`/`if-else` 兜底。
+
+- `infer_route`、意图分类、补充信息抽几个标量
+- 枚举约束明确（进出口、运价类型、规格代码）
+- 提示词短、禁止编造、空值优于猜测
+
+Flash 的 `parameter-extractor`：`reasoning_mode: prompt`（通义 `function_call` 易空 `content[]`）；`temperature: 0.1`；`enable_thinking: false`。
+
+## 用 Plus（复杂）
+
+满足任一则 Plus：多源材料要对照合成；长规则+多例外+结构化 JSON；金额/条款/引用必须忠实且易漏约束；长文档/OCR 转写后的宽表抽取；需要跨段推理或排歧而下游无法规则补全。
+
+- 报价合成、RAG 成文、可追溯长答、询价单宽字段抽取
+
+## 判定
+
+能写成「从原文抄/映射到封闭枚举，错了下游可修」→ Flash。必须「同时遵守多条业务规则并一次产出完整结构」→ Plus。拿不准且有规则兜底 → Flash。同一工作流允许混用，不要图省事全挂 Plus。

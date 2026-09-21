@@ -39,6 +39,7 @@ data:
 ```
 
 - `agent.package_ref` / `agent_binding.package_ref` 必须能在 `agent_packages` 里解析。
-- `declared_outputs` 为空时下游用 `text` / `files` / `json`；非空则只用声明名。
+- `declared_outputs` 为空时只向下游暴露系统输出 `text`，不要再写入预设 `files` / `json`。
+- 非空时只持久化自定义字段；系统仍带 `text`。自定义名可用 `files` / `json`，但不可占用 `text`、`switch`、`_session`。
 - DSL 不含 Skill 和文件。`omitted_assets` 只记录缺失，不编造内容。
 - 固定工具调用用普通 tool 节点；工具选择动态时才用 Agent。
