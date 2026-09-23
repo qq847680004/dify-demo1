@@ -168,7 +168,7 @@ workflow:
             io_direction：1=出口，2=进口；推不出则 1。条款/服务范围不得推翻港码（港码由下游规则覆盖）。
             rate_type 只能是：FBA, DUAL, PORT, FCL_FEEDER, SPECIAL_EXPORT, REEFER_EXPORT, FCL_EXPORT, FCL_IMPORT, LCL_EXPORT, LCL_IMPORT, AIR_EXPORT, RAIL。禁止传 SEA。
             空运进口 / 汽运 / 多式联运无主表 → skip_rate=true 且 rate_type 空。空运出口 → AIR_EXPORT。铁运 → RAIL。
-            海运：整箱/FCL→FCL_*；拼箱/LCL/CBM/TON→LCL_*；都没有则默认 FCL_*（按进出口），skip_rate=false。柜型读不出可填 40HQ（默认猜）。箱量读不出填 1。
+            海运：整箱/FCL→FCL_*；拼箱/LCL/CBM/TON→LCL_*；都没有则默认 FCL_*（按进出口），skip_rate=false。未提供柜型或读不出时 container_type 必须填空字符串（禁止默认猜40HQ）。箱量读不出填 0。
             服务范围 FBA/双清/集港/驳船优先。特种 OT/FR+出口→SPECIAL_EXPORT；冷冻 RF+出口→REEFER_EXPORT。
             skip_rate 仅当没有对应主表。
           model:
@@ -633,6 +633,11 @@ workflow:
                 schedule_note = s(supp.get("schedule_note"))
                 spec_hint = s(supp.get("spec_hint"))
                 blob_text = " ".join([spec, spec_hint, svc, s(supplement)])
+                has_user_spec = bool(s(spec) or s(spec_hint))
+                if not has_user_spec and s(supplement):
+                    supp_txt = s(supplement)
+                    if BARE_BOX_RE.search(supp_txt) or any(k in supp_txt for k in ("高柜", "平柜", "大柜", "小柜", "普柜", "冷柜", "开顶", "框架", "HQ", "GP", "OT", "FR", "RF")):
+                        has_user_spec = True
                 types, qty, has_cbm, has_ton = parse_spec(blob_text)
                 if not types:
                     a_types, a_qty = alias_spec(blob_text)
@@ -642,12 +647,13 @@ workflow:
                     if not qty:
                         qty = a_qty
                 ic = s(infer_container).upper()
-                if ic and ic not in types and re.fullmatch(BOX, ic, re.I):
+                if has_user_spec and ic and ic not in types and re.fullmatch(BOX, ic, re.I):
                     types.append(ic.upper())
                 if not qty:
                     qty = n(infer_qty, 0)
                 if types and not qty:
                     qty = 1
+                real_types = list(types) if has_user_spec else []
                 oc = port_cc(opc)
                 dc = port_cc(dpc)
                 io = 0
@@ -737,8 +743,8 @@ workflow:
                 put_ports(order_body, opc, op, dpc, dp, False)
                 bt = biz_of(logi, io)
                 put(order_body, "bizType", bt)
-                if types:
-                    order_body["containerType"] = types[0]
+                if real_types:
+                    order_body["containerType"] = real_types[0]
                 charge_body = {}
                 skip_charge = 1
                 if logi:
@@ -1403,17 +1409,29 @@ workflow:
                 3. 两边都有：报价仍按这一条运价；侧边仍列出该条市场运价与全部相似单；每项一行涨跌。
                 4. 两边都无（含 skipRate 未调接口、或调了 hits 空）：fees=[]，hint 用「请补充运价中心的数据或联系管理员。」
                 5. 目录有、运价/历史都没有的项：可按目录名补一行，sourceType=DIFY，needVerify=true，remark 含「参考价格，请核实」，金额禁止臆造——无依据则 unitPrice=0 且 selectedFlag=0；hint 追加「{费用名} 在系统历史报价有缺项，已动态填补，请核对。」。用 chargeItems 全部。
-                6. 涨跌：每项一行；模型自选对照哪张历史单；相对差绝对值≥10% 为差距巨大；每一张都巨大则改对 top1 并加差价提示。只比历史应收（feeDirection=1）。先折同规格（单价×询价箱量 ↔ 历史同柜型金额）。币种不同先用 fxUsd 再比；换汇后的涨跌句写出所用汇率与日期；换不到该项不写涨跌、金额照报。对不上费用名 →「历史无此项，无法对照」。不得因历史没有就删掉运价项。
+                6. 涨跌：每项一行；模型自选对照哪张历史单；相对差绝对值≥10% 为差距巨大；每一张都巨大则改对 top1。合计涨跌用同一张对照单写入 trendHint。只比历史应收（feeDirection=1）。先折同规格（单价×询价箱量 ↔ 历史同柜型金额）。币种不同先用 fxUsd 再比；换汇后的涨跌句写出所用汇率与日期；换不到该项不写涨跌、金额照报。对不上费用名 →「历史无此项，无法对照」。不得因历史没有就删掉运价项。
                 7. All-in / 到港：仍按费用项逐行报，不发明一口价合并行。
                 8. quantity：柜型费用用 analyzed.quantity；票结（提单费等）用 1。
                 9. sourceType：运价主表/关联费用 RATE；历史 HISTORY；目录补缺 DIFY。不要 MANUAL。
                 10. totalAmount：只加 selectedFlag=1 且 unitPrice>0 的行；totalCurrency 优先运价币种，否则 USD。
                 11. 费用来源写入 fees[].remark：运价主表「来源=运价中心 {rateId} {rateTypeLabel} {spec}」；关联费用「来源=运价中心 {rateId} {feeKindLabel} {feeName} extraId={extraId}」；历史「来源=相似订单明细 {feeName} {amount}{currency}/{单位}」。禁止写订单号。
                 12. 指定船司/航线未命中（analyzed.carrier/routeName 有值但 rateHit 对应字段不一致）时 hint 追加「未命中指定船司/航线，已按同港有效运价报价，请核对。」且 needVerify=true。不要因此改报空。
-                13. 任一项或合计相对差≥10% 才追加「与相似历史案例差价较大，请复核后再对外报价。」
+                13. 合计涨跌只写 trendHint，不要写进 hint，禁止「与相似历史案例差价较大，请复核后再对外报价。」仅两边都有且本次合计与对照历史单应收合计已折到同一币种时填写。相对差=(本次合计-历史应收合计)/历史应收合计，百分比取绝对值四舍五入为整数。历史合计≤0 或换不到汇率：trendHint 与 alertColor 都为 ""。
+                0%：alertColor=normal，trendHint=「当前报价与相似历史单持平。」
+                1%–9% 且本次更高：alertColor=normal，trendHint=「当前报价较相似历史单略有上浮，约{n}%。」
+                1%–9% 且本次更低：alertColor=normal，trendHint=「当前报价较相似历史单略有下跌，约{n}%。」
+                ≥10% 且本次更高：alertColor=red，trendHint=「当前报价较相似历史单上浮约{n}%，差距较大，请确认报价明细。」
+                ≥10% 且本次更低：alertColor=red，trendHint=「当前报价较相似历史单下跌约{n}%，差距较大，请确认报价明细。」
+                只有运价、只有历史、两边都无：两字段都为 ""。
+
+                【重要约束与禁忌】
+                - 当 orderHits 非空（即匹配到相似历史订单）时：
+                  1. 绝对禁止输出「未匹配到足够相似的历史关闭单，故无上浮/下跌对照」！该句仅在 orderHits 为空时使用。
+                  2. 提示语 hint 必须使用两边都有的原文：「本次费用按运价中心当前有效运价生成（最新运价）。报价金额以市场运价为准。」
+                  3. 必须提供上浮/下跌标识和提示语：必须根据本次合计与相似历史单应收合计计算 trendHint（如「当前报价较相似历史单略有上浮，约5%。」或「当前报价与相似历史单持平。」）与 alertColor（normal 或 red）；fees[].trendText 必须给出每项费用的涨跌对比（如「较相似订单持平」或「较历史下跌 100USD（约 4%）」等）；marketRates[].trend 必须给出相对本次主运费单价的「上涨/下跌/持平」。
 
                 【hint 原文】
-                两边都有：本次费用按运价中心当前有效运价生成（最新运价）。匹配到的市场运价与相似历史单均已列出；报价金额以市场运价为准。每个费用项只报一行。
+                两边都有：本次费用按运价中心当前有效运价生成（最新运价）。报价金额以市场运价为准。
                 只有市场运价：本次费用按运价中心当前有效运价生成（最新运价）。未匹配到足够相似的历史关闭单，故无上浮/下跌对照。
                 只有相似历史单：当前没有匹配的最新运价，本次费用按相似历史订单报价生成，仅供参考。建议在运价中心补充有效运价或联系管理员。
                 未调有效运价接口或 hits 空（无论有无历史以外的两边都无）：请补充运价中心的数据或联系管理员。有历史时仍用上面「只有相似历史单」整句。
@@ -1424,9 +1442,24 @@ workflow:
 
                 【steps】三步恒在，HTTP 失败仍 progress=done。仅当你无法输出对象时由下游标 LLM failed。
 
-                短例1（有运价精确档）：{"analyzed":{"ioDirection":1,"ioDirectionLabel":"出口","logisticsType":"SEA","rateType":"FCL_EXPORT","rateTypeLabel":"出口整箱","queryText":"出口整箱 宁波 CNNGB 洛杉矶 USLAX 定制家具 2x40HQ","containerTypes":["40HQ"],"selectedSpec":"40HQ","quantity":2,"skipRate":false,"carrier":"","routeName":"","country":"","transitType":""},"steps":[{"code":"RECALL","name":"检索召回","progress":"done","detail":"匹配运价中心有效运价 + 相似历史成交文案"},{"code":"RULES","name":"规则引擎","progress":"done","detail":"按运输方式与进出口列出应报费用项，校验计费单位"},{"code":"LLM","name":"LLM 合成","progress":"done","detail":"生成预填报价单草稿并注明依据"}],"fees":[{"feeName":"海运费","unitPrice":2480.0,"quantity":2.0,"currencyCode":"USD","amount":4960.0,"remark":"来源=运价中心 R1 出口整箱 40HQ","sourceType":"RATE","chargeUnit":"柜","requiredFlag":1,"selectedFlag":1,"needVerify":false,"trendText":""}],"totalAmount":4960.0,"totalCurrency":"USD","hint":"本次费用按运价中心当前有效运价生成（最新运价）。未匹配到足够相似的历史关闭单，故无上浮/下跌对照。","marketRates":[{"priceText":"$2,480/40HQ","rateDate":"2024-07-01","trend":"持平","unitPrice":2480.0,"containerType":"40HQ","carrier":"","rateId":"R1"}],"similarQuotes":[],"competitorHint":null}
+                短例1（有运价无历史单）：similarQuotes 为空，hint 为「本次费用按运价中心当前有效运价生成（最新运价）。未匹配到足够相似的历史关闭单，故无上浮/下跌对照。」，trendHint 和 alertColor 为空串。
+                短例2（两边都有）：similarQuotes 包含历史单，hint 为「本次费用按运价中心当前有效运价生成（最新运价）。报价金额以市场运价为准。」，trendHint 为「当前报价较相似历史单持平。」或包含上浮/下跌约n%，alertColor 为 normal 或 red，fees[0].trendText 注明涨跌，marketRates[0].trend 为持平/上涨/下跌。
+                【fees 结构严格约束】
+                fees 数组中每个对象必须严格包含以下键名：
+                - feeName: 费用中文全称（如「海运基本运费」、「燃油附加费」、「目的港操作费」、「报关代理费」等，严禁为空字符串，禁止使用 name 或 fee_name 代替）
+                - chargeUnit: 计费单位（如「箱」、「票」、「CBM」、「KG」，严禁为空，禁止使用 unit 代替）
+                - unitPrice: 单价数值
+                - quantity: 数量数值
+                - amount: 金额数值（单价×数量）
+                - currencyCode: 币种代码（如「USD」、「CNY」）
+                - sourceType: 来源类型（RATE / HISTORY / DIFY）
+                - remark: 费用来源说明
+                - requiredFlag: 是否必选（1 或 0）
+                - selectedFlag: 是否勾选（1 或 0）
+                - needVerify: 是否需复核（true 或 false）
+                - trendText: 单项涨跌对比文案
 
-                短例2（仅历史）：fees 的 sourceType=HISTORY，remark 不含订单号，hint 含「仅供参考」，competitorHint 为 null。
+                短例3（仅历史）：fees 的 sourceType=HISTORY，remark 不含订单号，hint 含「仅供参考」，competitorHint 为 null。
             - id: synth-user
               role: user
               text: "{{#pack_context.context_json#}}"
@@ -1456,11 +1489,12 @@ workflow:
                 {"code": "RULES", "name": "规则引擎", "progress": "done", "detail": "按运输方式与进出口列出应报费用项，校验计费单位"},
                 {"code": "LLM", "name": "LLM 合成", "progress": "done", "detail": "生成预填报价单草稿并注明依据"},
             ]
-            HINT_BOTH = "本次费用按运价中心当前有效运价生成（最新运价）。匹配到的市场运价与相似历史单均已列出；报价金额以市场运价为准。每个费用项只报一行。"
+            HINT_BOTH = "本次费用按运价中心当前有效运价生成（最新运价）。报价金额以市场运价为准。"
             HINT_RATE = "本次费用按运价中心当前有效运价生成（最新运价）。未匹配到足够相似的历史关闭单，故无上浮/下跌对照。"
             HINT_HIST = "当前没有匹配的最新运价，本次费用按相似历史订单报价生成，仅供参考。建议在运价中心补充有效运价或联系管理员。"
             HINT_DETAIL = "请提供更详细的询价信息（港口、运输方式、箱型/货量、品名等），以获得更精准的报价。"
             HINT_NO_RATE = "请补充运价中心的数据或联系管理员。"
+            HINT_GAP_OLD = "与相似历史案例差价较大，请复核后再对外报价。"
 
 
             def peel(text):
@@ -1479,7 +1513,14 @@ workflow:
                     return default
 
 
-            def main(llm_text: str = "", analyzed_json: str = "", recall_ok: float = 0, info_insufficient: float = 0, skip_rate: float = 0) -> dict:
+            def main(
+                llm_text: str = "",
+                analyzed_json: str = "",
+                recall_ok: float = 0,
+                info_insufficient: float = 0,
+                skip_rate: float = 0,
+                context_json: str = "",
+            ) -> dict:
                 analyzed = {}
                 try:
                     analyzed = json.loads(analyzed_json or "{}")
@@ -1515,6 +1556,13 @@ workflow:
                 if not isinstance(obj, dict):
                     failed = True
                     obj = {}
+                ctx = {}
+                try:
+                    ctx = json.loads(context_json or "{}")
+                except Exception:
+                    ctx = {}
+                order_hits = ctx.get("orderHits") if isinstance(ctx.get("orderHits"), list) else []
+                fx_usd = ctx.get("fxUsd") if isinstance(ctx.get("fxUsd"), dict) else {}
                 fees = obj.get("fees") if isinstance(obj.get("fees"), list) else []
                 clean_fees = []
                 for row in fees:
@@ -1539,15 +1587,26 @@ workflow:
                     st = str(row.get("sourceType") or "")
                     if st not in ("RATE", "HISTORY", "DIFY"):
                         st = "DIFY" if price == 0 else "RATE"
+                    fn = str(row.get("feeName") or row.get("name") or row.get("fee_name") or row.get("chargeName") or row.get("itemName") or "").strip()
+                    cu = str(row.get("chargeUnit") or row.get("unit") or row.get("charge_unit") or row.get("billingUnit") or "").strip()
+                    rmk = str(row.get("remark") or "").strip()
+                    if not fn and rmk:
+                        m_fn = re.search(r"来源[-=]相似订单明细\s+([^\s\d/]+)", rmk)
+                        if m_fn:
+                            fn = m_fn.group(1).strip()
+                    if not cu and "/" in rmk:
+                        m_cu = re.search(r"/\s*([^\s]+)$", rmk)
+                        if m_cu:
+                            cu = m_cu.group(1).strip()
                     clean_fees.append({
-                        "feeName": str(row.get("feeName") or ""),
+                        "feeName": fn,
                         "unitPrice": round(price, 2),
                         "quantity": qty,
                         "currencyCode": str(row.get("currencyCode") or "USD"),
                         "amount": amount,
-                        "remark": str(row.get("remark") or ""),
+                        "remark": rmk,
                         "sourceType": st,
-                        "chargeUnit": str(row.get("chargeUnit") or ""),
+                        "chargeUnit": cu,
                         "requiredFlag": rf,
                         "selectedFlag": sf,
                         "needVerify": nv,
@@ -1578,6 +1637,25 @@ workflow:
                 sq = obj.get("similarQuotes") if isinstance(obj.get("similarQuotes"), list) else []
                 if failed:
                     mr, sq = [], []
+                if not sq and order_hits and not failed:
+                    for h in order_hits:
+                        if isinstance(h, dict):
+                            biz_no = str(h.get("bizNo") or "")
+                            dt = str(h.get("updateTime") or h.get("etd") or "")[:10]
+                            op = str(h.get("originPortCode") or "")
+                            dp = str(h.get("destPortCode") or "")
+                            sp = str(h.get("cargoSpec") or h.get("containerType") or "")
+                            f_list = h.get("fees") if isinstance(h.get("fees"), list) else []
+                            f_summary = ""
+                            if f_list and isinstance(f_list[0], dict):
+                                f0 = f_list[0]
+                                f_summary = "%s %s%s" % (f0.get("feeName") or "", f0.get("amount") or "", f0.get("currency") or "")
+                            sq.append({
+                                "quoteNo": biz_no,
+                                "dealDate": dt,
+                                "inquiryStatusLabel": "已成交",
+                                "summary": ("%s-%s %s %s" % (op, dp, sp, f_summary)).strip(),
+                            })
                 steps = [dict(x) for x in STEPS]
                 if failed:
                     steps[2]["progress"] = "failed"
@@ -1587,10 +1665,95 @@ workflow:
                     hint = HINT_NO_RATE
                 elif not has_r and has_h:
                     hint = HINT_HIST
-                elif not hint:
-                    hint = HINT_BOTH if has_h else HINT_RATE
+                elif has_r and has_h:
+                    if not hint or "本次费用按运价中心当前有效运价生成" in hint or "未匹配到足够相似的历史关闭单" in hint or HINT_HIST in hint or HINT_NO_RATE in hint:
+                        hint = HINT_BOTH
+                    elif HINT_BOTH not in hint:
+                        hint = HINT_BOTH + " " + hint
+                else:
+                    if not hint or "本次费用按运价中心当前有效运价生成" in hint:
+                        hint = HINT_RATE
                 if has_r and spec_guessed and HINT_DETAIL not in hint:
                     hint = (hint + " " + HINT_DETAIL).strip()
+                hint = hint.replace("匹配到的市场运价与相似历史单均已列出；", " ")
+                hint = hint.replace("匹配到的市场运价与相似历史单均已列出", " ")
+                hint = hint.replace("每个费用项只报一行。", " ")
+                hint = hint.replace("每个费用项只报一行", " ")
+                hint = hint.replace(HINT_GAP_OLD, " ")
+                hint = re.sub(r"\s{2,}", " ", hint).strip()
+                trend_hint = str(obj.get("trendHint") or "").strip()
+                alert_color = str(obj.get("alertColor") or "").strip()
+                if alert_color not in ("red", "normal"):
+                    alert_color = ""
+
+                if has_r and has_h:
+                    hist_total = 0.0
+                    if order_hits and isinstance(order_hits[0], dict):
+                        h_fees = order_hits[0].get("fees") if isinstance(order_hits[0].get("fees"), list) else []
+                        for hf in h_fees:
+                            if isinstance(hf, dict) and num(hf.get("feeDirection"), 1) == 1:
+                                h_amt = num(hf.get("amount"), 0.0)
+                                h_cur = str(hf.get("currency") or "USD").upper()
+                                if h_cur == cur.upper() or not fx_usd:
+                                    hist_total += h_amt
+                                else:
+                                    rate_h = num(fx_usd.get(h_cur.lower()), 1.0)
+                                    rate_cur = num(fx_usd.get(cur.lower()), 1.0)
+                                    if rate_h > 0:
+                                        usd_val = h_amt / rate_h
+                                        hist_total += usd_val * rate_cur
+                    if (not trend_hint or not alert_color) and hist_total > 0 and total > 0:
+                        diff_pct = round((total - hist_total) / hist_total * 100)
+                        if diff_pct == 0:
+                            trend_hint = "当前报价与相似历史单持平。"
+                            alert_color = "normal"
+                        elif 1 <= diff_pct <= 9:
+                            trend_hint = "当前报价较相似历史单略有上浮，约%d%%。" % diff_pct
+                            alert_color = "normal"
+                        elif -9 <= diff_pct <= -1:
+                            trend_hint = "当前报价较相似历史单略有下跌，约%d%%。" % abs(diff_pct)
+                            alert_color = "normal"
+                        elif diff_pct >= 10:
+                            trend_hint = "当前报价较相似历史单上浮约%d%%，差距较大，请确认报价明细。" % diff_pct
+                            alert_color = "red"
+                        else:
+                            trend_hint = "当前报价较相似历史单下跌约%d%%，差距较大，请确认报价明细。" % abs(diff_pct)
+                            alert_color = "red"
+                    elif not trend_hint:
+                        trend_hint = "当前报价与相似历史单持平。"
+                        alert_color = "normal"
+
+                    main_price = 0.0
+                    for row in clean_fees:
+                        if row["sourceType"] == "RATE" and row["unitPrice"] > 0:
+                            main_price = row["unitPrice"]
+                            break
+                    for m in mr:
+                        if isinstance(m, dict):
+                            t = str(m.get("trend") or "").strip()
+                            if t not in ("上涨", "下跌", "持平"):
+                                up = num(m.get("unitPrice"), 0.0)
+                                if main_price > 0 and up > 0:
+                                    if up > main_price:
+                                        m["trend"] = "上涨"
+                                    elif up < main_price:
+                                        m["trend"] = "下跌"
+                                    else:
+                                        m["trend"] = "持平"
+                                else:
+                                    m["trend"] = "持平"
+
+                    if clean_fees and not clean_fees[0].get("trendText") and trend_hint:
+                        if "上浮" in trend_hint:
+                            clean_fees[0]["trendText"] = "较相似订单上浮"
+                        elif "下跌" in trend_hint:
+                            clean_fees[0]["trendText"] = "较相似订单下跌"
+                        else:
+                            clean_fees[0]["trendText"] = "较相似订单持平"
+                else:
+                    trend_hint = ""
+                    alert_color = ""
+
                 out = {
                     "analyzed": analyzed,
                     "steps": steps,
@@ -1598,6 +1761,8 @@ workflow:
                     "totalAmount": round(total, 2),
                     "totalCurrency": cur or "USD",
                     "hint": hint,
+                    "trendHint": trend_hint,
+                    "alertColor": alert_color,
                     "marketRates": mr,
                     "similarQuotes": sq,
                     "competitorHint": None,
@@ -1614,6 +1779,8 @@ workflow:
               value_selector: [assemble, info_insufficient]
             - variable: skip_rate
               value_selector: [assemble, skip_rate]
+            - variable: context_json
+              value_selector: [pack_context, context_json]
           outputs:
             result_json:
               type: string

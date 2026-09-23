@@ -122,7 +122,7 @@ assemble → fetch_fx
 | 港码 / 无码时港名 | **必须精确**（`originPortCode` 或 `originPortName`） | 港码精确；无码才填 `originPortName`；港名始终进检索句 | 不传 |
 | 码头 | **必须精确**；有则填，无命中不改港 | 无码头键 → 进检索句 | 不传 |
 | `carrier` / `routeName` / `routeCode` / `country` / `transitType` | **有则精确**（结构化 AND）**且必须写入 `queryText`**。第一轮空则丢掉这些结构化键，检索句里的原文留下做向量排序，同港同类型再出 1 条 | 无这些键 → 只进检索句做向量 | 不传 |
-| 规格代码 / `containerTypes` | 提示，不滤行、不截价 | 可选 `containerType` 包含匹配；规格仍进检索句 | 不传 |
+| 规格代码 / `containerTypes` | 提示，不滤行、不截价 | 可选 `containerType` 包含匹配（去掉 40HQ 默认值，未提取到箱型则不传）；规格仍进检索句 | 不传 |
 | `schedule_note`、件数重量、补充信息剩余原文 | **仅检索句**（向量排序） | **仅检索句** | 不传 |
 | `logisticsType` + `ioDirection` | 不靠它们选表 | 必填 io；物流类型可选 | **仅这两项** |
 
@@ -195,7 +195,7 @@ assemble **先**按港码规则，能推出则覆盖 `infer_route`：
 | 铁运 | `RAIL`（进口无独立表，仍只打 `RAIL`，不得改打空运） |
 | 汽运 / 多式联运 | 无表 → skip_rate，不调接口 |
 
-进出口推不出默认 `1` 出口。海运/铁运柜型读不出默认 `40HQ`、`quantity=1`，写入运价 Body `containerTypes`（只作提示）；`specGuessed=true`，主运行 `needVerify`，remark「规格按 40HQ 默认」。拼箱无 CBM/TON 仍打 LCL 表，选档单位默认 `CBM`，不编方数。空运出口不编重量档。
+进出口推不出默认 `1` 出口。海运/铁运柜型读不出默认 `40HQ`、`quantity=1`，写入运价 Body `containerTypes`（只作提示）；`specGuessed=true`，主运行 `needVerify`，remark「规格按 40HQ 默认」。拼箱无 CBM/TON 仍打 LCL 表，选档单位默认 `CBM`，不编方数。空运出口不编重量档。**注意：相似案例接口去掉 40HQ 默认值，如果没有明确提取到箱型则不传 `containerType`，禁止把猜的 40HQ 塞给相似历史单接口导致误过滤。**
 
 ### 箱型 / 箱量
 
@@ -203,8 +203,9 @@ assemble **先**按港码规则，能推出则覆盖 `infer_route`：
 - 仅箱型无数字 → `quantity=1`
 - CBM/方/TON → 拼箱货量；空运重量档写入检索句，不编造柜型
 - 正则失败但原文有规格含义 → 用 `infer_route` 归一
-- 海运/铁运读不出柜型 → 默认 `40HQ` + 箱量 1（`specGuessed`）；拼箱无货量 → 单位 `CBM` 不编方数；空运不编重量档
+- 海运/铁运读不出柜型 → 运价默认 `40HQ` + 箱量 1（`specGuessed`）；拼箱无货量 → 单位 `CBM` 不编方数；空运不编重量档
 - 运价 Body 的 `containerTypes` **只作提示**：不滤行、不截价；报价从出参 `specPrices` 选最相似一档
+- 相似案例（历史订单）Body 的 `containerType`：**去掉 40HQ 默认值，只有实际提取到箱型才传；未提供/读不出箱型则不传该键**
 
 ### 检索句 `queryText`
 
@@ -233,7 +234,7 @@ assemble **先**按港码规则，能推出则覆盖 `infer_route`：
 | 节点 | 方法 | path | Body 要点 |
 | --- | --- | --- | --- |
 | `search_rates` | POST | `/agent/rate/search` | `queryText` + **必填 `rateType`** + 有代码列则精确港码，无代码列/无码则精确 `originPortName`/`destPortName` + 抽出则填码头/船司/航线/航线代码/国家/直达中转 + 可选 `containerTypes`/`validOn`；**不传 `top`**；禁止 `logisticsType` / `bizType` 选表；一般不传 `ioDirection`；禁止 `originPlace`/`destPlace` |
-| `search_orders` | POST | `/agent/order/search` | `queryText`（含补充信息与船司航线船期）+ **必填 `ioDirection`** + `logisticsType` + 港码（无码才 `originPortName`/`destPortName`）+ 可选 `bizType`（货运类型：`SEA_EXPORT` 等，**不是** `FCL_EXPORT`）/`containerType`；`top=8` 只截订单条；默认关闭 60；禁止 `rateType`；禁止把运价专用键塞进 Body；出参港名为 `originPortName`/`destPortName` |
+| `search_orders` | POST | `/agent/order/search` | `queryText`（含补充信息与船司航线船期）+ **必填 `ioDirection`** + `logisticsType` + 港码（无码才 `originPortName`/`destPortName`）+ 可选 `bizType`（货运类型：`SEA_EXPORT` 等，**不是** `FCL_EXPORT`）/`containerType`（仅实际有箱型才传，去掉 40HQ 默认值）；`top=8` 只截订单条；默认关闭 60；禁止 `rateType`；禁止把运价专用键塞进 Body；出参港名为 `originPortName`/`destPortName` |
 | `list_charges` | POST | `/agent/settlement/charge-items` | **仅** `logisticsType` + `ioDirection`；**不传 `top`**；禁止港口、金额、`queryText`、船司航线国家。汽运/多式联运仍必须带进出口 |
 
 运价精确键（有值才填，**禁止编造**）：
@@ -271,14 +272,14 @@ HTTP 鉴权：Bearer API Key（`type: "api-key"` / `bearer`），另加头 `TENA
 
 ## 算费规则（写入 `synthesize` 系统提示；code 再兜底形状）
 
-【匹配到的市场运价】【相似历史单】【费用明细】分别进 `marketRates` / `similarQuotes` / `fees`。【报价说明】【差价提示】及缺项句写入 `hint`。
+【匹配到的市场运价】【相似历史单】【费用明细】分别进 `marketRates` / `similarQuotes` / `fees`。【报价说明】及缺项句写入 `hint`。合计相对历史的上浮/下跌/持平另写 `trendHint`，颜色写 `alertColor`。**当匹配到相似历史单时，严禁提示“未匹配到足够相似的历史关闭单，故无上浮/下跌对照”，且必须计算并提供上浮/下跌标识（trendText、marketRates.trend）和提示语（trendHint、alertColor）。**
 
 1. **有有效运价**：只用 `hits[0]`。主运费与 extras 都从该行 `specPrices[]` **选出最相似尽量精准的一档**（规则见下）。关联费用按 `feeKindLabel` 分种类，再按 `feeName` 对齐费用项；无规格价则用 `unitPrice`/`perBill`。未匹配种类没有行，不要当成漏报价。不同种类禁止合成一行。同一 `chargeCode`/规范化中文名禁止两行。禁止从多条运价 hits 拼金额。
 2. **无运价有历史**：金额来自相似单 `fees[]`（`chargeCode`=`feeCode` 优先，其次规范化中文名），必须声明仅供参考。禁止同义词猜（THC ≠ 目的港操作费）。每条 hit 的 `fees[]` 全部列出。
 3. **两边都有**：报价仍按这一条运价；侧边仍列出该条市场运价与全部相似单；每项一行涨跌。
 4. **两边都无**（未调有效运价或 hits 空，且无历史）：`fees=[]`，hint 用「请补充运价中心的数据或联系管理员。」
 5. 目录有、运价/历史都没有的项：可按目录名补一行，`sourceType=DIFY`，`needVerify=true`，`remark` 含「参考价格，请核实」，金额禁止臆造——无依据则 `unitPrice=0` 且 `selectedFlag=0`；`hint` 追加缺项句。费用项目录用 `items[]` 全部，不要只摘前几条。
-6. 涨跌：每项一行；模型自选对照哪张历史单；相对差绝对值 ≥10% 为差距巨大；每一张都巨大则改对 top1 并加差价提示。只比历史 **应收**（`feeDirection=1`）。先折同规格（单价×询价箱量 ↔ 历史同柜型金额）。币种不同先用 `fetch_fx` 再比；换汇后的涨跌句写出所用汇率与日期；换不到该项不写涨跌、金额照报。对不上费用名 → `历史无此项，无法对照`。不得因历史没有就删掉运价项。
+6. 涨跌：每项一行；模型自选对照哪张历史单；相对差绝对值 ≥10% 为差距巨大；每一张都巨大则改对 top1。合计涨跌用同一张对照单，写入 `trendHint`（见下）。只比历史 **应收**（`feeDirection=1`）。先折同规格（单价×询价箱量 ↔ 历史同柜型金额）。币种不同先用 `fetch_fx` 再比；换汇后的涨跌句写出所用汇率与日期；换不到该项不写涨跌、金额照报。对不上费用名 → `历史无此项，无法对照`。不得因历史没有就删掉运价项。
 7. All-in / 到港：`service_scope` 不发明「一口价」合并行；仍按费用项逐行报。
 8. `quantity`：柜型费用解析出的箱量；票结（提单费等）用 `1`。
 9. `sourceType`：运价主表/关联费用 `RATE`；历史 `HISTORY`；目录补缺 `DIFY`。不要 `MANUAL`。
@@ -297,13 +298,13 @@ HTTP 鉴权：Bearer API Key（`type: "api-key"` / `bearer`），另加头 `TENA
 
 ### `hint` 提示语（按分支原样用，可多句用空格或换行拼接）
 
-**两边都有：**
+**两边都有（有有效运价且有相似历史单，严格禁止出现“未匹配到足够相似的历史关闭单”）：**
 
 ```text
-本次费用按运价中心当前有效运价生成（最新运价）。匹配到的市场运价与相似历史单均已列出；报价金额以市场运价为准。每个费用项只报一行。
+本次费用按运价中心当前有效运价生成（最新运价）。报价金额以市场运价为准。
 ```
 
-**只有市场运价：**
+**只有市场运价（有有效运价且无相似历史单）：**
 
 ```text
 本次费用按运价中心当前有效运价生成（最新运价）。未匹配到足够相似的历史关闭单，故无上浮/下跌对照。
@@ -333,11 +334,20 @@ HTTP 鉴权：Bearer API Key（`type: "api-key"` / `bearer`），另加头 `TENA
 未命中指定船司/航线，已按同港有效运价报价，请核对。
 ```
 
-**差价提示**（任一项或合计相对差 ≥10% 才追加）：
+**合计涨跌与上浮/下跌提示语**（两边都有时必出，由 LLM 生成或由 `normalize` 节点兜底计算）：
+本次合计与对照历史单应收合计折到同一币种对比。相对差 = (本次合计 − 历史应收合计) / 历史应收合计，百分比取绝对值四舍五入为整数。
+若 LLM 未生成或生成空串，由 `normalize` 节点自动计算补齐，确保有相似历史单时必有上浮/下跌提示语与标识：
 
-```text
-与相似历史案例差价较大，请复核后再对外报价。
-```
+| 四舍五入后 | `alertColor` | `trendHint` |
+| --- | --- | --- |
+| 0% | `normal` | 当前报价与相似历史单持平。 |
+| 1%–9% 且本次更高 | `normal` | 当前报价较相似历史单略有上浮，约{n}%。 |
+| 1%–9% 且本次更低 | `normal` | 当前报价较相似历史单略有下跌，约{n}%。 |
+| ≥10% 且本次更高 | `red` | 当前报价较相似历史单上浮约{n}%，差距较大，请确认报价明细。 |
+| ≥10% 且本次更低 | `red` | 当前报价较相似历史单下跌约{n}%，差距较大，请确认报价明细。 |
+
+`red` 只涂 `trendHint`。其余 `hint` 不涂红。只有运价、只有历史、两边都无时 `trendHint` 与 `alertColor` 都为空串。
+同时，`fees[].trendText` 提供单项费用涨跌说明，`marketRates[].trend` 提供相对本次主运费单价的上涨/下跌/持平标识。
 
 **缺项填补**（目录补了运价/历史都没有的行时追加，原型底栏）：
 
@@ -408,6 +418,8 @@ HTTP 鉴权：Bearer API Key（`type: "api-key"` / `bearer`），另加头 `TENA
   "totalAmount": 6040.0,
   "totalCurrency": "USD",
   "hint": "目的港 THC、DO 费在系统历史报价有缺项，已动态填补，请核对。",
+  "trendHint": "当前报价较相似历史单上浮约20%，差距较大，请确认报价明细。",
+  "alertColor": "red",
   "marketRates": [
     {
       "priceText": "$2,480/40HQ",
@@ -431,7 +443,7 @@ HTTP 鉴权：Bearer API Key（`type: "api-key"` / `bearer`），另加头 `TENA
 }
 ```
 
-缺省：`fees`/`marketRates`/`similarQuotes` 为 `[]`；`hint` 为 `""`；`totalAmount` 为 `0`；`totalCurrency` 为 `"USD"`；`competitorHint` 为 `null`；`analyzed` 数字/布尔用 `0`/`false`，字符串 `""`，数组 `[]`。`steps` 三步恒在，HTTP 失败仍 `progress=done`（空召回），仅 LLM 结构化失败时 `LLM.progress=failed` 且 `fees=[]`。
+缺省：`fees`/`marketRates`/`similarQuotes` 为 `[]`；`hint`、`trendHint`、`alertColor` 为 `""`；`totalAmount` 为 `0`；`totalCurrency` 为 `"USD"`；`competitorHint` 为 `null`；`analyzed` 数字/布尔用 `0`/`false`，字符串 `""`，数组 `[]`。`steps` 三步恒在，HTTP 失败仍 `progress=done`（空召回），仅 LLM 结构化失败时 `LLM.progress=failed` 且 `fees=[]`。`alertColor` 只允许 `red`、`normal`、空串。
 
 ### 侧边映射
 
@@ -460,9 +472,19 @@ HTTP 鉴权：Bearer API Key（`type: "api-key"` / `bearer`），另加头 `TENA
 
 ### `fees[]` 与原型表
 
-对齐原型高亮行：`needVerify=true` 时前端可黄底（如提单费「参考价格，请核实」，或规格近档）。询价页若不识该键可忽略。
-
-`trendText` 给行备注区的涨跌短句；无对照可 `""`。
+`fees[]` 数组每个对象必须严格包含以下键名（`synthesize` prompt 必须显式声明，`normalize` 做多别名兼容与 remark 兜底）：
+- `feeName`: 费用中文全称（如「海运基本运费」、「燃油附加费」、「目的港操作费」、「报关代理费」等；禁止用 `name`/`fee_name` 导致下游读取为空；`normalize` 兼容 `name`/`fee_name`/`chargeName`/`itemName`，空时从 `remark` 中正则兜底提取）。
+- `chargeUnit`: 计费单位（如「箱」、「票」、「CBM」、「KG」；禁止直接透传输入单据的 `unit` 导致字段落空；`normalize` 兼容 `unit`/`charge_unit`/`billingUnit`，空时从 `remark` 的 `/单位` 中正则兜底提取）。
+- `unitPrice`: 单价数值。
+- `quantity`: 数量数值。
+- `amount`: 金额数值（`unitPrice * quantity` 四舍五入保留 2 位）。
+- `currencyCode`: 币种代码（如 `USD`、`CNY`）。
+- `sourceType`: 来源类型（`RATE` / `HISTORY` / `DIFY`）。
+- `remark`: 费用来源说明。
+- `requiredFlag`: 是否必选（`1` 或 `0`）。
+- `selectedFlag`: 是否勾选（`1` 或 `0`）。
+- `needVerify`: 是否需复核（`true` 或 `false`，对齐原型高亮行：`needVerify=true` 时前端可黄底高亮，如提单费「参考价格，请核实」或规格近档；询价页若不识该键可忽略）。
+- `trendText`: 给行备注区的涨跌短句；无对照可为 `""`。
 
 ---
 
@@ -504,17 +526,17 @@ HTTP 鉴权：Bearer API Key（`type: "api-key"` / `bearer`），另加头 `TENA
 
 并行扇出合法；`assemble` 等 infer + 补充解析；`pack_context` 等齐四路。HTTP 节点打开 retry；失败路径接到输出空 body 的 code，避免整图失败。
 
-**`infer_route`：** 模型 `qwen3.7-flash-2026-07-15`，`reasoning_mode: prompt`，`temperature: 0.1`，关 thinking。输入含基础字段与补充信息。只抽进出口、运价类型、规格。失败时 assemble 用港码规则、默认出口、默认 `40HQ`。不解析船司航线。无主表才 skip。
+**`infer_route`：** 模型 `qwen3.7-flash-2026-07-15`，`reasoning_mode: prompt`，`temperature: 0.1`，关 thinking。输入含基础字段与补充信息。只抽进出口、运价类型、规格。未提供柜型或读不出时规格填空字符串，禁止默认猜 40HQ（40HQ 仅在 assemble 中用于运价选档提示，不污染相似历史单）；失败时 assemble 用港码规则、默认出口。不解析船司航线。无主表才 skip。
 
 **`parse_supplement`：** 同上抽取配置。只抽补充信息表内字段。禁止把「尽量快」写成直达，禁止把品名写成船司。
 
-**`assemble`：** 港码规则覆盖进出口，推不出默认出口。运输方式归一。海运无整箱/拼箱默认 FCL 表 + `40HQ`/`quantity=1`。无主表才 `skip_rate`。按模板拼检索句与三个 JSON Body。
+**`assemble`：** 港码规则覆盖进出口，推不出默认出口。运输方式归一。海运无整箱/拼箱默认 FCL 表（仅运价选档使用 `40HQ`/`quantity=1` 并标 `specGuessed`；若用户未传规格，订单检索 Body 不传 `containerType`）。无主表才 `skip_rate`。按模板拼检索句与三个 JSON Body。
 
 **`pack_context`：** 解析 R 包 `data.hits` / `data.items`；去掉进价类键（若误出则丢）；把 analyzed（含抽出键与 preferred spec）、运价 `hits[0]`（含完整 `specPrices`/`extras`）、订单 hits（每条 `fees[]` 全留）、费用项 `items[]` 全部、汇率表压成给 LLM 的 JSON。订单 hits 超长可截至 8 条；**禁止截**每单 `fees[]` 与费用项 `items[]`。
 
 **`synthesize`：** 模型 `qwen3.7-plus`。`context.enabled: false`。只输出一个 JSON 对象（不要 Markdown 围栏）。系统提示 = 算费规则 + 规格价选档 + 输出键表 + 2 个短例（有运价精确档 / 仅历史）。强调：只用 `hits[0]`；从完整 `specPrices` 选最相似一档；按 `feeKindLabel` 分行。user = `{{#pack_context.context_json#}}`。
 
-**`normalize`：** 剥 ````json`；缺键补缺省；`competitorHint=None`；`steps` 强制三步；`amount=unitPrice*quantity`（四舍五入 2 位）；`needVerify` 非 bool 则 false；LLM 失败或非对象 → 空费用 + 对应 hint + `LLM.progress=failed`。
+**`normalize`：** 剥 ````json`；缺键补缺省；`competitorHint=None`；`steps` 强制三步；`amount=unitPrice*quantity`（四舍五入 2 位）；`needVerify` 非 bool 则 false；`alertColor` 非 `red`/`normal` 则 `""`；**核心纠偏与兜底：当有相似历史单时，强制剔除或纠正“未匹配到足够相似的历史关闭单，故无上浮/下跌对照”，替换为两边都有的标准 hint；当两边都有且 `trendHint` 为空时，代码自动根据本次合计与历史应收合计计算相对差百分比并填补 `trendHint`、`alertColor`、`marketRates[].trend`**；去掉旧句「与相似历史案例差价较大，请复核后再对外报价。」；无双边对照、LLM 失败时清空 `trendHint` 与 `alertColor`；LLM 失败或非对象 → 空费用 + 对应 hint + `LLM.progress=failed`。
 
 ---
 
@@ -532,6 +554,7 @@ HTTP 鉴权：Bearer API Key（`type: "api-key"` / `bearer`），另加头 `TENA
 | 合计 | `totalAmount` + `totalCurrency` |
 | 黄底须核对行 | `needVerify=true` |
 | 缺项 hint | `hint` |
+| 底栏合计涨跌（红/温和） | `trendHint` + `alertColor`（`red` 只涂这一句） |
 | 右边市场运价 + 涨跌 | `marketRates[]` |
 | 相似历史单 + 已成交 | `similarQuotes[]` |
 | 竞品价参考 | 不做，`competitorHint=null` |
